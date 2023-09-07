@@ -47,32 +47,26 @@ complaints_test
 
 ```{r}
 head(complaints_train)
+glimpse(complaints_train)
 head(complaints_test)
+glimpse(complaints_test)
 
 skimr::skim(complaints_train)
 skimr::skim(complaints_test)
+
+complaints_train |> distinct(state) |> view()
 ```
 
-#### Evaluate State-Complaint Correlation
+For the training data we have initially 90'975 complaints (rows) and 6 total variables (columns) where no values are missing. The variable state has 62 unique values which include all the 50 US states and other territories outside the Union as Puerto Rico (PR) or Armed forces Pacific (AP). All complaints are submitted vie web.
 
-```{r}
-# install.packages("corrplot")
-# library(corrplot)
-# 
-# state_cor <- cor(complaints_train |> select(state, product))
-# corrplot::corrplot(state_cor, tl.cex = 0.5)
-```
-
-No correlation can be determined from the
-
-### #### Term frequency
+#### Term frequency
 
 From the exploring of the data, no correlation between the different variables were visible. The most promising way to design the model is to create a matrix with how frequent a given word appears for a given complaint and use it as features for a machine learning algorithm. In the following the matrix is generated.
 
 ```{r}
 # reduce sample size
-# complaints_train <- complaints_train |>
-#   sample_n(100)
+complaints_train <- complaints_train |>
+  sample_n(100)
 
 ```
 
@@ -94,7 +88,6 @@ total_words <- complaints_words |>
 
 complaints_words <- left_join(complaints_words, total_words)
 ```
-
 
 ```{r}
 # visualize frequency / total words in complaints
@@ -152,11 +145,7 @@ complaints_words |>
   coord_flip()
 ```
 
-
-
-
-
-````{r}
+```{r}
 
 complaints_train_id <- complaints_train |> 
   select(product, "complaint" = consumer_complaint_narrative) |>
@@ -188,6 +177,18 @@ complaints_joined <- count_join
 #   pivot_wider(names_from = word, values_from = prod_count)
 
 ```
+
+#### Evaluate State-Complaint Correlation
+
+```{r}
+# install.packages("corrplot") 
+library(corrplot)  
+
+state_cor <- cor(complaints_train |> select(state, product)) 
+corrplot::corrplot(state_cor, tl.cex = 0.5)
+```
+
+No correlation can be determined from the
 
 ### Step 1: Data Splitting with rsample
 
@@ -349,44 +350,6 @@ If we are using the Tidymodels framework, and you have earlier chosen your best 
 ```{r}
 
 ```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 ### Frequency matrix
 

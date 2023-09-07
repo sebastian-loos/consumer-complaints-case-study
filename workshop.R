@@ -61,6 +61,7 @@ tidy_dtm <- dtm |> tidy()
 wider_complaints <- tidy_dtm |> pivot_wider(names_from = term, values_from = count)
 
 
+# Step 1: Split into training and testing sets
 
 # ensure the split is done the same if code is rerun
 set.seed(1234)
@@ -76,15 +77,13 @@ testing_complaints <-testing(split_complaints)
 head(testing_complaints)
 count(testing_complaints, document)
 
-
+# Step 1.2 Split training set into cross validation sets
 
 set.seed(1234)
 vfold_complaints <- rsample::vfold_cv(data = training_complaints, v = 4)
 vfold_complaints
 
 pull(vfold_complaints, splits)
-
-
 
 # Explore one of the folds
 first_fold <-vfold_complaints$splits[[1]]
