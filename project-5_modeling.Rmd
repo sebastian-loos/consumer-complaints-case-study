@@ -1,0 +1,591 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup_chunks, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.path = "images/",
+  out.width = "100%",
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+## Load Packages
+
+```{r}
+library(readr)
+library(here)
+library(tidyverse)
+library(tidytext)
+library(tm)
+library(rsample)
+library(recipes)
+library(rpart)
+library(tune)
+```
+
+## Load data sets
+
+```{r}
+complaints_train <- read_csv(here::here("data", "raw_data", "data_complaints_train.csv")) |> 
+  janitor::clean_names()
+complaints_train
+
+complaints_test <- read_csv(here::here("data", "raw_data", "data_complaints_test.csv")) |>
+  janitor::clean_names()
+complaints_test
+
+# save(complaints_train, complaints_test, file = here::here("data", "tidy_data", "project_5.rda"))
+```
+
+## Explore data
+
+```{r}
+head(complaints_train)
+head(complaints_test)
+
+skimr::skim(complaints_train)
+skimr::skim(complaints_test)
+```
+
+#### Evaluate State-Complaint Correlation
+
+```{r}
+# install.packages("corrplot")
+# library(corrplot)
+# 
+# state_cor <- cor(complaints_train |> select(state, product))
+# corrplot::corrplot(state_cor, tl.cex = 0.5)
+```
+
+No correlation can be determined from the
+
+### #### Term frequency
+
+From the exploring of the data, no correlation between the different variables were visible. The most promising way to design the model is to create a matrix with how frequent a given word appears for a given complaint and use it as features for a machine learning algorithm. In the following the matrix is generated.
+
+```{r}
+# reduce sample size
+# complaints_train <- complaints_train |>
+#   sample_n(100)
+
+```
+
+```{r}
+# count number of times word appears within each text
+complaints_words <- complaints_train |> 
+  filter(!is.na(consumer_complaint_narrative)) |> 
+  select(product, "complaint" = consumer_complaint_narrative) |>
+  mutate("complaint" = str_replace_all(complaint, "X{2,4}", ""),
+         "id_number" = row_number(), .after = product) |> 
+  unnest_tokens(word, complaint) |>
+  filter(!word %in% stop_words$word) |> 
+  count(product, word, sort = TRUE)
+
+# count total number of words in each poem
+total_words <- complaints_words |> 
+  group_by(product) |> 
+  summarize(total = sum(n))
+
+complaints_words <- left_join(complaints_words, total_words)
+```
+
+
+```{r}
+# visualize frequency / total words in complaints
+ggplot(complaints_words_joined, aes(n/total, fill = product)) +
+  geom_histogram(show.legend = FALSE, bins = 5) +
+  facet_wrap(~product, ncol = 2, scales = "free_y")
+```
+
+```{r}
+# added column with term frequency
+freq_by_rank <- complaints_words |> 
+  group_by(product) |> 
+  mutate(rank = row_number(), 
+         `term frequency` = n/total)
+
+# However, we’re not just interested in word frequency, as stop words (such as “a”) have the highest term frequency. Rather, we’re interested in tf-idf - those words in a document that are unique relative to the other documents being analyzed.
+
+complaints_words <- complaints_words |>
+  bind_tf_idf(word, product, n)
+
+# sort ascending
+complaints_words |>
+  arrange(tf_idf)
+
+# sort descending
+complaints_words |>
+  arrange(desc(tf_idf))
+```
+
+```{r}
+
+complaints_words |>
+  arrange(desc(tf_idf)) |>
+  mutate(word = factor(word, levels = rev(unique(word)))) |> 
+  group_by(product) |> 
+  top_n(30) |> 
+  ungroup() |>
+  ggplot(aes(word, tf_idf, fill = product)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = NULL, y = "tf-idf") +
+  facet_wrap(~product, ncol = 2, scales = "free") +
+  coord_flip()
+
+
+complaints_words |>
+  arrange(desc(tf)) |>
+  mutate(word = factor(word, levels = rev(unique(word)))) |> 
+  group_by(product) |> 
+  top_n(30) |> 
+  ungroup() |>
+  ggplot(aes(word, tf, fill = product)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = NULL, y = "tf") +
+  facet_wrap(~product, ncol = 2, scales = "free") +
+  coord_flip()
+```
+
+
+
+
+
+````{r}
+
+complaints_train_id <- complaints_train |> 
+  select(product, "complaint" = consumer_complaint_narrative) |>
+  mutate("complaint" = str_replace_all(complaint, "X{2,4}", ""),
+         "id_complaint" = row_number(), .after = product)
+
+complaints_train_otpdpr <- complaints_train_id |> 
+  unnest_tokens(word, complaint) |> 
+  filter(!word %in% stop_words$word)
+
+complaints_counts <- complaints_train_otpdpr |> 
+  count(word, product, sort = TRUE) |>
+  cast_dtm(document = product, term = word, value = n) |> 
+  tidy() |> 
+  rename(word = term, product = document, prod_count = count)
+
+complaints_tot
+complaints_counts |> 
+  group_by(word) |> 
+  mutate(word_freq =  )
+
+count_join <- complaints_counts |>
+  left_join(complaints_train_otpdpr, by = join_by(product, word)) |> 
+  unique()
+
+complaints_joined <- count_join
+
+# count_join |> 
+#   pivot_wider(names_from = word, values_from = prod_count)
+
+```
+
+### Step 1: Data Splitting with rsample
+
+```{r}
+# ensure the split is done the same if code is rerun
+set.seed(1234)
+# split data set into test and training
+split_complaints <- initial_split(complaints_joined, prop = 2/3) 
+split_complaints
+
+# split_complaints <- initial_split(complaints_counts, prop = 2/3) 
+# split_complaints
+```
+
+```{r}
+training_complaints <- training(split_complaints)
+head(training_complaints)
+count(training_complaints, product)
+
+testing_complaints <-testing(split_complaints)
+head(testing_complaints)
+count(testing_complaints, product)
+```
+
+```{r}
+set.seed(1234)
+vfold_complaints <- rsample::vfold_cv(data = training_complaints, v = 4)
+vfold_complaints
+
+pull(vfold_complaints, splits)
+```
+
+```{r}
+# Explore one of the folds
+first_fold <-vfold_complaints$splits[[1]]
+head(as.data.frame(first_fold, data = "analysis")) # training set of this fold
+
+head(as.data.frame(first_fold, data = "assessment")) # test set of this fold
+```
+
+### Step 2: Create recipe with recipe()
+
+```{r}
+complaints_recipe <- training_complaints |>
+  recipe(product ~ prod_count) 
+
+complaints_recipe
+
+summary(complaints_recipe)
+```
+
+### Step 3: Specify model, engine, and mode (parsnip)
+
+```{r}
+complaints_model <- 
+  # define Model (Classification And Regression Tree (CART))
+  parsnip::decision_tree() |>
+  # set mode (classification)
+  parsnip::set_mode("classification") |>
+  #set engine (rpart)
+  parsnip::set_engine("rpart")
+
+complaints_model
+
+```
+
+#### Specify hyperparameters to tune (tune())
+
+### Step 4: Create workflow, add recipe, add model
+
+```{r}
+prod_comp_wflow <-workflows::workflow() |>
+           workflows::add_recipe(complaints_recipe) |>
+           workflows::add_model(complaints_model)
+
+prod_comp_wflow
+```
+
+### Step 5.1 Fit workflow with cross validation
+
+```{r}
+prod_comp_wflow_fit <- parsnip::fit(prod_comp_wflow, data = training_complaints)
+
+prod_comp_wflow_fit
+
+# store fit
+wf_fit_comp <- prod_comp_wflow_fit |> 
+  pull_workflow_fit()
+
+wf_fit_comp$fit$variable.importance
+```
+
+### Step 5.2: Fit workflow with cross validation
+
+```{r}
+set.seed(122)
+resample_fit <- tune::fit_resamples(prod_comp_wflow, vfold_complaints)
+```
+
+### Step 5.3: Fit workflow with tuning
+
+```{r}
+reasmple_fit <-tune::tune_grid(prod_comp_wflow_tune, resamples = vfold_complaints, grid = 4)
+
+tune::collect_metrics(resample_fit)
+
+tune::show_best(resample_fit, metric = "accuracy")
+```
+
+### Step 6: Get predictions
+
+```{r}
+pred_products <- predict(prod_comp_wflow_fit, new_data = training_complaints)
+
+
+yardstick::accuracy(training_complaints, 
+                truth = product, estimate = pred_products$.pred_class)
+
+count(training_complaints, product)
+count(pred_products, .pred_class)
+
+predicted_and_truth <- bind_cols(training_complaints, 
+        predicted_products = pull(pred_products, .pred_class))
+
+head(predicted_and_truth)
+
+filter(predicted_and_truth, product != predicted_products)
+```
+
+```{r}
+set.seed(122)
+resample_fit <- tune::fit_resamples(prod_comp_wflow, vfold_complaints)
+
+resample_fit
+
+collect_metrics(resample_fit)
+```
+
+```{r}
+final_workflow <- finalize_workflow(my_wf, my_best_model)
+final_model <- fit(final_workflow, my_training_data)
+my_results <- predict(final_model, my_testing_data )
+
+my_results |> knitr::kable( caption = "My Predictions")
+```
+
+### Criteria
+
+1.  Does the submission build a machine learning algorithm to classify consumer complaints?
+
+2.  Do the authors describe what they expect the out of sample error to be and estimate the error appropriately with cross-validation?
+
+This is NOT giving anything away in terms of the grade. A few people have submitted final projects which FULLY MET the stated grading criteria. So I gave them full marks.
+
+But in these projects, the individuals did not take the extra step of fitting their final model to the test data set.
+
+If we are using the Tidymodels framework, and you have earlier chosen your best model *my_best_model* $$see **?show_best** for options$$, then with all due love and respect, your final code block generically might look like this:
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### Frequency matrix
+
+From the exploring of the data, no correlation between the different variables were visible. The most promising way to design the model is to create a matrix with how frequent a given word appears for a given complaint and use it as features for a machine learning algorithm. In the following the matrix is generated.
+
+```{r}
+# reduce sample size
+complaints_train <- complaints_train |> 
+  sample_n(100)
+
+
+complaints_train_id <- complaints_train |> 
+  select(product, "complaint" = consumer_complaint_narrative) |>
+  mutate("complaint" = str_replace_all(complaint, "X{2,4}", ""),
+         "id_complaint" = row_number(), .after = product)
+
+complaints_train_otpdpr <- complaints_train_id |> 
+  unnest_tokens(word, complaint) |> 
+  filter(!word %in% stop_words$word)
+
+complaints_counts <- complaints_train_otpdpr |> 
+  count(word, .by = product, sort = TRUE) |>
+  rename(product = .by) |>
+  cast_dtm(document = product, term = word, value = n) |> 
+  tidy() |> 
+  rename(word = term, product = document, prod_count = count)
+
+count_join <- complaints_counts |>
+  left_join(complaints_train_otpdpr, by = join_by(product, word)) |> 
+  unique()
+
+complaints_simlpe <- complaints_train |>
+  select(!c(consumer_complaint_narrative, zip_code, submitted_via)) |> 
+  mutate("id_complaint" = row_number(), .after = product)
+  
+complaints_joined <- count_join |>
+  left_join(complaints_simlpe, by = join_by(id_complaint, product))
+
+complaints_joined |>
+  pivot_wider(names_from = word, values_from = prod_count)
+```
+
+### Step 1: Data Splitting with rsample
+
+```{r}
+# ensure the split is done the same if code is rerun
+set.seed(1234)
+# split data set into test and training
+split_complaints <- initial_split(complaints_joined, prop = 2/3) 
+split_complaints
+
+# split_complaints <- initial_split(complaints_counts, prop = 2/3) 
+# split_complaints
+```
+
+```{r}
+training_complaints <- training(split_complaints)
+head(training_complaints)
+count(training_complaints, product)
+
+testing_complaints <-testing(split_complaints)
+head(testing_complaints)
+count(testing_complaints, product)
+```
+
+```{r}
+set.seed(1234)
+vfold_complaints <- rsample::vfold_cv(data = training_complaints, v = 4)
+vfold_complaints
+
+pull(vfold_complaints, splits)
+```
+
+```{r}
+# Explore one of the folds
+first_fold <-vfold_complaints$splits[[1]]
+head(as.data.frame(first_fold, data = "analysis")) # training set of this fold
+
+head(as.data.frame(first_fold, data = "assessment")) # test set of this fold
+```
+
+### Step 2: Create recipe with recipe()
+
+```{r}
+complaints_recipe <- training_complaints |>
+  recipe(product ~ count + company + state) 
+
+complaints_recipe
+
+summary(complaints_recipe)
+```
+
+### Step 3: Specify model, engine, and mode (parsnip)
+
+```{r}
+complaints_model <- 
+  # define Model (Classification And Regression Tree (CART))
+  parsnip::decision_tree() |>
+  # set mode (classification)
+  parsnip::set_mode("classification") |>
+  #set engine (rpart)
+  parsnip::set_engine("rpart")
+
+complaints_model
+
+```
+
+#### Specify hyperparameters to tune (tune())
+
+### Step 4: Create workflow, add recipe, add model
+
+```{r}
+prod_comp_wflow <-workflows::workflow() |>
+           workflows::add_recipe(complaints_recipe) |>
+           workflows::add_model(complaints_model)
+
+prod_comp_wflow
+```
+
+### Step 5.1 Fit workflow with cross validation
+
+```{r}
+prod_comp_wflow_fit <- parsnip::fit(prod_comp_wflow, data = training_complaints)
+
+prod_comp_wflow_fit
+
+# store fit
+wf_fit_comp <- prod_comp_wflow_fit |> 
+  pull_workflow_fit()
+
+wf_fit_comp$fit$variable.importance
+```
+
+### Step 5.2: Fit workflow with cross validation
+
+```{r}
+set.seed(122)
+resample_fit <- tune::fit_resamples(prod_comp_wflow, vfold_complaints)
+```
+
+### Step 5.3: Fir workflow with tuning
+
+```{r}
+reasmple_fit <-tune::tune_grid(prod_comp_wflow_tune, resamples = vfold_complaints, grid = 4)
+
+tune::collect_metrics(resample_fit)
+
+tune::show_best(resample_fit, metric = "accuracy")
+```
+
+### Step 6: Get predictions
+
+```{r}
+pred_products <- predict(prof_comp_wflow_fit, new_data = training_complaints)
+
+
+yardstick::accuracy(training_complaints, 
+                truth = products, estimate = pred_products$.pred_class)
+
+count(training_complaints, Species)
+count(pred_products, .pred_class)
+
+predicted_and_truth <- bind_cols(training_complaints, 
+        predicted_products = pull(pred_products, .pred_class))
+
+head(predicted_and_truth)
+
+filter(predicted_and_truth, products != predicted_products)
+```
+
+```{r}
+set.seed(122)
+resample_fit <- tune::fit_resamples(prod_comp_wflow, vfold_complaints)
+
+resample_fit
+
+collect_metrics(resample_fit)
+```
+
+```{r}
+final_workflow <- finalize_workflow(my_wf, my_best_model)
+final_model <- fit(final_workflow, my_training_data)
+my_results <- predict(final_model, my_testing_data )
+
+my_results |> knitr::kable( caption = "My Predictions")
+```
+
+### Criteria
+
+1.  Does the submission build a machine learning algorithm to classify consumer complaints?
+
+2.  Do the authors describe what they expect the out of sample error to be and estimate the error appropriately with cross-validation?
+
+This is NOT giving anything away in terms of the grade. A few people have submitted final projects which FULLY MET the stated grading criteria. So I gave them full marks.
+
+But in these projects, the individuals did not take the extra step of fitting their final model to the test data set.
+
+If we are using the Tidymodels framework, and you have earlier chosen your best model *my_best_model* $$see **?show_best** for options$$, then with all due love and respect, your final code block generically might look like this:
+
+```{r}
+
+```
