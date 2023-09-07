@@ -94,9 +94,9 @@ head(as.data.frame(first_fold, data = "assessment")) # test set of this fold
 
 ### Step 2: Create recipe with recipe()
 
-
 complaints_recipe <- training_complaints %>%
-  recipe(document ~ count + company + state) 
+  recipes::recipe(document ~ .) 
+  # recipes::recipe(document ~ count + company + state) 
 
 complaints_recipe
 

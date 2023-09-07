@@ -234,11 +234,120 @@ head(as.data.frame(first_fold, data = "assessment")) # test set of this fold
 ```{r}
 complaints_recipe <- training_complaints |>
   recipe(product ~ prod_count) 
+  # recipes::recipe(product ~ .) |>
+  # recipes::update_role(id, new_role = "id variable")
 
 complaints_recipe
-
 summary(complaints_recipe)
 ```
+
+#### Specify preprocessing steps 
+
+```{r}
+# complaints_recipe <- complaints_recipe |> 
+#   step_dummy(state, company, zip_code) |>
+#   step_corr(all_predictors(), - ?) |>
+#   step_nzv(all_predictors(), - ?)
+# 
+# complaints_recipe
+```
+
+#### Check the preprocessing
+
+```{r}
+prepped_rec <- prep(complaints_recipe, verbose = TRUE, retain = TRUE)
+
+names(prepped_rec)
+```
+
+```{r}
+preproc_train <- bake(prepped_rec, new_data = NULL)
+glimpse(preproc_train)
+```
+
+#### Extract preprocessed testing data using bake()
+
+```{r}
+baked_test_complaints <- recipes::bake(prepped_rec, new_data = testing_complaints)
+glimpse(baked_test_pm)
+```
+
+Some of our levels were not previously seen in the training set! (company_Not.a.company???)
+
+-\> check differences between testing and training set
+
+```{r}
+traincompanies <- training_complaints |>
+  distinct(company)
+testcompanies <- ttesting_complaints |>
+  distinct(company)
+
+#get the number of companies that were different
+dim(dplyr::setdiff(traincompanies, testcompanies))
+
+#get the number of companies that overlapped
+dim(dplyr::intersect(traincompanies, testcompanies))
+```
+
+## Itration 2
+
+### Fix dataset
+
+```{r}
+pm %<>%
+  mutate(city = case_when(city == "Not in a city" ~ "Not in a city",
+                          city != "Not in a city" ~ "In a city"))
+glimpse(pm)
+```
+
+### Step 1: Data Splitting with rsample
+
+```{r}
+# ensure the split is done the same if code is rerun
+set.seed(1234)
+# split data set into test and training
+pm_split <- rsample::initial_split(data = pm, prop = 2/3)
+pm_split
+
+train_pm <- training(pm_split)
+test_pm <-testing(pm_split)
+```
+
+### Step 2: Create recipe with recipe()
+
+```{r}
+novel_rec <- train_pm  |> 
+  recipes::recipe(value ~ .) |>
+    update_role(id, new_role = "id variable") |>
+    update_role("fips", new_role = "county id") |>
+    step_dummy(state, county, city, zcta, one_hot = TRUE) |>
+    step_corr(all_numeric()) |>
+    step_nzv(all_numeric()) 
+
+novel_rec
+```
+
+#### Check the preprocessing
+
+```{r}
+prepped_rec <- prep(novel_rec, verbose = TRUE, retain = TRUE)
+```
+
+```{r}
+preproc_train <- bake(prepped_rec, new_data = NULL) 
+glimpse(preproc_train)
+```
+
+We now only have *38* variables instead of 50 and no longer categorical variables.
+
+#### Extract preprocessed testing data using bake()
+
+```{r}
+baked_test_pm <- recipes::bake(prepped_rec, new_data = testing_complaints)
+glimpse(baked_test_pm)
+```
+
+Great, now we no longer have NA values!
 
 ### Step 3: Specify model, engine, and mode (parsnip)
 
@@ -246,10 +355,10 @@ summary(complaints_recipe)
 complaints_model <- 
   # define Model (Classification And Regression Tree (CART))
   parsnip::decision_tree() |>
-  # set mode (classification)
-  parsnip::set_mode("classification") |>
   #set engine (rpart)
-  parsnip::set_engine("rpart")
+  parsnip::set_engine("rpart") |>
+  # set mode (classification)
+  parsnip::set_mode("classification")
 
 complaints_model
 
@@ -260,9 +369,9 @@ complaints_model
 ### Step 4: Create workflow, add recipe, add model
 
 ```{r}
-prod_comp_wflow <-workflows::workflow() |>
-           workflows::add_recipe(complaints_recipe) |>
-           workflows::add_model(complaints_model)
+prod_comp_wflow <- workflows::workflow() |>
+                   workflows::add_recipe(complaints_recipe) |>
+                   workflows::add_model(complaints_model)
 
 prod_comp_wflow
 ```
@@ -274,9 +383,15 @@ prod_comp_wflow_fit <- parsnip::fit(prod_comp_wflow, data = training_complaints)
 
 prod_comp_wflow_fit
 
-# store fit
+```
+
+#### Assessing the Model Fit
+
+```{r}
 wf_fit_comp <- prod_comp_wflow_fit |> 
-  pull_workflow_fit()
+  extract_fit_parsnip() |> 
+  broom::tidy()
+wf_fit_comp
 
 wf_fit_comp$fit$variable.importance
 ```
@@ -299,6 +414,27 @@ tune::show_best(resample_fit, metric = "accuracy")
 ```
 
 ### Step 6: Get predictions
+
+```{r}
+
+```
+
+#### Save predicted outcome values
+
+```{r}
+
+```
+
+
+#### Visualizing Model Performance
+
+```{r}
+# *wf_fitted_values* %>% 
+#   ggplot(aes(x =  value, y = .fitted)) + 
+#   geom_point() + 
+#   xlab("actual outcome values") + 
+#   ylab("predicted outcome values")
+```
 
 ```{r}
 pred_products <- predict(prod_comp_wflow_fit, new_data = training_complaints)
