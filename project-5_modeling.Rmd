@@ -27,17 +27,23 @@ library(rsample)
 library(recipes)
 library(rpart)
 library(tune)
+library(vip)
+library(workflows)
 ```
 
 ## Load data sets
 
 ```{r}
 complaints_train <- read_csv(here::here("data", "raw_data", "data_complaints_train.csv")) |> 
-  janitor::clean_names()
+  janitor::clean_names() |> 
+  select(-submitted_via) |> 
+  mutate(problem_id = as.factor(row_number()), .before = everything()) |> 
+  rename(complaint = consumer_complaint_narrative)
 complaints_train
 
 complaints_test <- read_csv(here::here("data", "raw_data", "data_complaints_test.csv")) |>
-  janitor::clean_names()
+  janitor::clean_names() |> 
+  select(-submitted_via)
 complaints_test
 
 # save(complaints_train, complaints_test, file = here::here("data", "tidy_data", "project_5.rda"))
@@ -57,7 +63,7 @@ skimr::skim(complaints_test)
 complaints_train |> distinct(state) |> view()
 ```
 
-For the training data we have initially 90'975 complaints (rows) and 6 total variables (columns) where no values are missing. The variable state has 62 unique values which include all the 50 US states and other territories outside the Union as Puerto Rico (PR) or Armed forces Pacific (AP). All complaints are submitted vie web.
+For the training data we have initially 90'975 complaints (rows) and 6 total variables (columns) where no values are missing. The variable state has 62 unique values which include all the 50 US states and other territories outside the Union as Puerto Rico (PR) or Armed forces Pacific (AP).
 
 #### Term frequency
 
@@ -72,7 +78,9 @@ complaints_train <- complaints_train |>
 
 ```{r}
 # count number of times word appears within each text
-complaints_words <- complaints_train |> 
+complaints_words <- view()
+
+complaints_train |> 
   filter(!is.na(consumer_complaint_narrative)) |> 
   select(product, "complaint" = consumer_complaint_narrative) |>
   mutate("complaint" = str_replace_all(complaint, "X{2,4}", ""),

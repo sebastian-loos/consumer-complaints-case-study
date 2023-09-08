@@ -26,39 +26,54 @@ complaints <- c(
 )
 
 complaint_df <- tibble(
+  problem_id = as.factor(ids),
   product = sample(products, 20, replace = TRUE),
-  id = ids,
   complaint = complaints
-)
+  ) |> 
+  mutate(product = as_factor(product))
 
 # Load the data into a corpus
-dtm <- complaint_df |> 
+one_word <- complaint_df |> 
   unnest_tokens(word, complaint) |> 
-  filter(!word %in% stop_words$word) |> 
-  complaints_counts <- complaints_train_otpdpr |> 
-  count(word, .by = product, sort = TRUE) |>
-  rename(product = .by) |>
-  cast_dtm(document = product, term = word, value = n) |> 
-  tidy() |> 
-  rename(word = term, product = document)
+  filter(!word %in% stop_words$word)
 
-count_join <- complaints_counts |>
-  left_join(complaints_train_otpdpr, by = join_by(product, word)) |> 
-  unique()
-
-complaints_simlpe <- complaints_train |>
-  select(!consumer_complaint_narrative) |> 
-  mutate("id_complaint" = row_number(), .after = product)
-
-complaints_joined <- count_join |>
-  left_join(complaints_simlpe, by = join_by(id_complaint, product))
+dtm <- one_word |> 
+  count(problem_id, word) |> 
+  cast_dtm(document = problem_id, term = word, value = n)
   
-  # Create a Document-Term Matrix (DTM)
-  cast_dtm(product, word, id)
+inspect(dtm)
 
-tidy_dtm <- dtm |> tidy()
+# Assuming you have a DTM named 'dtm' and 'complaint_df' dataset
+data_matrix <- as.matrix(dtm)
+complaints_modeling <- cbind(complaint_df |> select(-complaint), data_matrix) |> 
+  as_tibble()
 
-wider_complaints <- tidy_dtm |> pivot_wider(names_from = term, values_from = count)
+complaints_modeling
+
+# complaints_counts <- complaints_df |> 
+#   count(word, .by = product, sort = TRUE) |>
+#   rename(product = .by) |>
+#   cast_dtm(document = product, term = word, value = n) |> 
+#   tidy() |> 
+#   rename(word = term, product = document)
+# 
+# count_join <- complaints_counts |>
+#   left_join(complaints_train_otpdpr, by = join_by(product, word)) |> 
+#   unique()
+# 
+# complaints_simlpe <- complaints_train |>
+#   select(!consumer_complaint_narrative) |> 
+#   mutate("id_complaint" = row_number(), .after = product)
+# 
+# complaints_joined <- count_join |>
+#   left_join(complaints_simlpe, by = join_by(id_complaint, product))
+#   
+#   # Create a Document-Term Matrix (DTM)
+#   cast_dtm(product, word, id)
+# 
+# tidy_dtm <- dtm |> tidy()
+# 
+# wider_complaints <- tidy_dtm |> pivot_wider(names_from = term, values_from = count)
 
 
 # Step 1: Split into training and testing sets
@@ -66,21 +81,21 @@ wider_complaints <- tidy_dtm |> pivot_wider(names_from = term, values_from = cou
 # ensure the split is done the same if code is rerun
 set.seed(1234)
 # split data set into test and training
-split_complaints <- initial_split(wider_complaints, prop = 2/3) 
+split_complaints <- initial_split(complaints_modeling, prop = 2/3) 
 split_complaints
 
-training_complaints <- training(split_complaints)
-head(training_complaints)
-count(training_complaints, document)
+train_complaints <- training(split_complaints)
+head(train_complaints)
+count(train_complaints, product)
 
-testing_complaints <-testing(split_complaints)
-head(testing_complaints)
-count(testing_complaints, document)
+test_complaints <-testing(split_complaints)
+head(test_complaints)
+count(test_complaints, product)
 
 # Step 1.2 Split training set into cross validation sets
 
 set.seed(1234)
-vfold_complaints <- rsample::vfold_cv(data = training_complaints, v = 4)
+vfold_complaints <- rsample::vfold_cv(data = train_complaints, v = 4)
 vfold_complaints
 
 pull(vfold_complaints, splits)
@@ -94,8 +109,8 @@ head(as.data.frame(first_fold, data = "assessment")) # test set of this fold
 
 ### Step 2: Create recipe with recipe()
 
-complaints_recipe <- training_complaints %>%
-  recipes::recipe(document ~ .) 
+complaints_recipe <- train_complaints %>%
+  recipes::recipe(product ~ .) 
   # recipes::recipe(document ~ count + company + state) 
 
 complaints_recipe
@@ -135,16 +150,23 @@ prod_comp_wflow
 ### Step 5.1 Fit workflow with cross validation
 
 
-prod_comp_wflow_fit <- parsnip::fit(prod_comp_wflow, data = training_complaints)
+prod_comp_wflow_fit <- parsnip::fit(prod_comp_wflow, data = train_complaints)
 
 prod_comp_wflow_fit
 
 # store fit
 wf_fit_comp <- prod_comp_wflow_fit %>% 
-  pull_workflow_fit()
+  extract_fit_parsnip()
 
-wf_fit_comp$fit$variable.importance
+wf_fit_comp
 
+# wf_fit_comp$fit$variable.importance
+
+#### Explore Variable importance using vip()
+
+prod_comp_wflow_fit %>% 
+  pull_workflow_fit() %>% 
+  vip(num_features = 10)
 
 ### Step 5.2: Fit workflow with cross validation
 
@@ -153,7 +175,7 @@ set.seed(122)
 resample_fit <- tune::fit_resamples(prod_comp_wflow, vfold_complaints)
 
 
-### Step 5.3: Fir workflow with tuning
+### Step 5.3: For workflow with tuning
 
 
 reasmple_fit <-tune::tune_grid(prod_comp_wflow_tune, resamples = vfold_complaints, grid = 4)
@@ -166,16 +188,16 @@ tune::show_best(resample_fit, metric = "accuracy")
 ### Step 6: Get predictions
 
 
-pred_documents <- predict(prof_comp_wflow_fit, new_data = training_complaints)
+pred_documents <- predict(prof_comp_wflow_fit, new_data = train_complaints)
 
 
-yardstick::accuracy(training_complaints, 
+yardstick::accuracy(train_complaints, 
                     truth = documents, estimate = pred_documents$.pred_class)
 
-count(training_complaints, Species)
+count(train_complaints, Species)
 count(pred_documents, .pred_class)
 
-predicted_and_truth <- bind_cols(training_complaints, 
+predicted_and_truth <- bind_cols(train_complaints, 
                                  predicted_documents = pull(pred_documents, .pred_class))
 
 head(predicted_and_truth)
