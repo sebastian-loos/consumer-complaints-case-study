@@ -91,7 +91,16 @@ complaints_count <- complaints_words |>
 
 complaints_count |> 
   group_by(product) |> 
-  arrange(desc(n), .by_group = TRUE) |> view()
+  mutate(tot_n = sum(n),
+         percentage = n/tot_n) |> view()
+
+complaints_count |> 
+  group_by(product) |>
+  filter(n > 11)
+
+complaints_count |> 
+  group_by(product) |> 
+  arrange(desc(n), .by_group = TRUE)
   
 complaints_dtm <- complaints_count|>
   cast_dtm(term = word, document = complaint_id, value = n)
