@@ -37,7 +37,8 @@ library(workflows)
 complaints_train <- read_csv(here::here("data", "raw_data", "data_complaints_train.csv")) |> 
   janitor::clean_names() |> 
   select(-submitted_via) |> 
-  mutate(problem_id = as.factor(row_number()), .before = everything()) |> 
+  mutate(complaint_id = as.factor(row_number()), .before = everything(),
+         product = as.factor(product)) |> 
   rename(complaint = consumer_complaint_narrative)
 complaints_train
 
@@ -60,7 +61,7 @@ glimpse(complaints_test)
 skimr::skim(complaints_train)
 skimr::skim(complaints_test)
 
-complaints_train |> distinct(state) |> view()
+# complaints_train |> distinct(state) |> view()
 ```
 
 For the training data we have initially 90'975 complaints (rows) and 6 total variables (columns) where no values are missing. The variable state has 62 unique values which include all the 50 US states and other territories outside the Union as Puerto Rico (PR) or Armed forces Pacific (AP).
@@ -72,131 +73,178 @@ From the exploring of the data, no correlation between the different variables w
 ```{r}
 # reduce sample size
 complaints_train <- complaints_train |>
-  sample_n(100)
+  sample_n(200)
 
 ```
 
 ```{r}
 # count number of times word appears within each text
-complaints_words <- view()
-
-complaints_train |> 
-  filter(!is.na(consumer_complaint_narrative)) |> 
-  select(product, "complaint" = consumer_complaint_narrative) |>
-  mutate("complaint" = str_replace_all(complaint, "X{2,4}", ""),
-         "id_number" = row_number(), .after = product) |> 
+complaints_words <- complaints_train |> 
+  mutate(complaint = str_replace_all(complaint, "X{2,4}", "")) |>
+  mutate(complaint_id = as.factor(row_number())) |> 
   unnest_tokens(word, complaint) |>
   filter(!word %in% stop_words$word) |> 
-  count(product, word, sort = TRUE)
+  relocate(word, .after = product)
 
-# count total number of words in each poem
-total_words <- complaints_words |> 
+complaints_count <- complaints_words |> 
+  count(complaint_id, product, word)
+
+complaints_count |> 
   group_by(product) |> 
-  summarize(total = sum(n))
+  arrange(desc(n), .by_group = TRUE) |> view()
+  
+complaints_dtm <- complaints_count|>
+  cast_dtm(term = word, document = complaint_id, value = n)
 
-complaints_words <- left_join(complaints_words, total_words)
+inspect(complaints_dtm)
+
+complaints_matrix <- as.matrix(complaints_dtm)
+complaints_matrix
+
+complaints_modeling <- complaints_train |> 
+  select(-complaint) |> 
+  rename(product_value = product,
+         company_dummy = company) |> 
+  cbind(complaints_matrix) |>
+  as_tibble()
+
+# # count total number of words in each poem
+# total_words <- complaints_words |> 
+#   group_by(product) |> 
+#   summarize(total = sum(n))
+# 
+# complaints_words <- left_join(complaints_words, total_words)
 ```
 
 ```{r}
-# visualize frequency / total words in complaints
-ggplot(complaints_words_joined, aes(n/total, fill = product)) +
-  geom_histogram(show.legend = FALSE, bins = 5) +
-  facet_wrap(~product, ncol = 2, scales = "free_y")
+# # count number of times word appears within each text
+# complaints_words <- complaints_train |> 
+#   filter(!is.na(complaint)) |> 
+#   select(product, complaint) |>
+#   mutate(complaint = str_replace_all(complaint, "X{2,4}", ""),
+#          "complaint_id" = row_number(), .after = product) |>
+#   unnest_tokens(word, complaint) |>
+#   filter(!word %in% stop_words$word) |> 
+#   count(product, word, sort = TRUE)
+# 
+# # count total number of words in each poem
+# total_words <- complaints_words |> 
+#   group_by(product) |> 
+#   summarize(total = sum(n))
+# 
+# complaints_words <- left_join(complaints_words, total_words)
 ```
 
 ```{r}
-# added column with term frequency
-freq_by_rank <- complaints_words |> 
-  group_by(product) |> 
-  mutate(rank = row_number(), 
-         `term frequency` = n/total)
-
-# However, we’re not just interested in word frequency, as stop words (such as “a”) have the highest term frequency. Rather, we’re interested in tf-idf - those words in a document that are unique relative to the other documents being analyzed.
-
-complaints_words <- complaints_words |>
-  bind_tf_idf(word, product, n)
-
-# sort ascending
-complaints_words |>
-  arrange(tf_idf)
-
-# sort descending
-complaints_words |>
-  arrange(desc(tf_idf))
+# # visualize frequency / total words in complaints
+# ggplot(complaints_words_joined, aes(n/total, fill = product)) +
+#   geom_histogram(show.legend = FALSE, bins = 5) +
+#   facet_wrap(~product, ncol = 2, scales = "free_y")
 ```
 
 ```{r}
-
-complaints_words |>
-  arrange(desc(tf_idf)) |>
-  mutate(word = factor(word, levels = rev(unique(word)))) |> 
-  group_by(product) |> 
-  top_n(30) |> 
-  ungroup() |>
-  ggplot(aes(word, tf_idf, fill = product)) +
-  geom_col(show.legend = FALSE) +
-  labs(x = NULL, y = "tf-idf") +
-  facet_wrap(~product, ncol = 2, scales = "free") +
-  coord_flip()
-
-
-complaints_words |>
-  arrange(desc(tf)) |>
-  mutate(word = factor(word, levels = rev(unique(word)))) |> 
-  group_by(product) |> 
-  top_n(30) |> 
-  ungroup() |>
-  ggplot(aes(word, tf, fill = product)) +
-  geom_col(show.legend = FALSE) +
-  labs(x = NULL, y = "tf") +
-  facet_wrap(~product, ncol = 2, scales = "free") +
-  coord_flip()
+# # added column with term frequency
+# freq_by_rank <- complaints_words |> 
+#   group_by(product) |> 
+#   mutate(rank = row_number(), 
+#          `term frequency` = n/total)
+# 
+# # However, we’re not just interested in word frequency, as stop words (such as “a”) have the highest term frequency. Rather, we’re interested in tf-idf - those words in a document that are unique relative to the other documents being analyzed.
+# 
+# complaints_words <- complaints_words |>
+#   bind_tf_idf(word, product, n)
+# 
+# # sort ascending
+# complaints_words |>
+#   arrange(tf_idf)
+# 
+# # sort descending
+# complaints_words |>
+#   arrange(desc(tf_idf))
 ```
 
 ```{r}
 
-complaints_train_id <- complaints_train |> 
-  select(product, "complaint" = consumer_complaint_narrative) |>
-  mutate("complaint" = str_replace_all(complaint, "X{2,4}", ""),
-         "id_complaint" = row_number(), .after = product)
+# complaints_words |>
+#   arrange(desc(tf_idf)) |>
+#   mutate(word = factor(word, levels = rev(unique(word)))) |> 
+#   group_by(product) |> 
+#   top_n(30) |> 
+#   ungroup() |>
+#   ggplot(aes(word, tf_idf, fill = product)) +
+#   geom_col(show.legend = FALSE) +
+#   labs(x = NULL, y = "tf-idf") +
+#   facet_wrap(~product, ncol = 2, scales = "free") +
+#   coord_flip()
+# 
+# 
+# complaints_words |>
+#   arrange(desc(tf)) |>
+#   mutate(word = factor(word, levels = rev(unique(word)))) |> 
+#   group_by(product) |> 
+#   top_n(30) |> 
+#   ungroup() |>
+#   ggplot(aes(word, tf, fill = product)) +
+#   geom_col(show.legend = FALSE) +
+#   labs(x = NULL, y = "tf") +
+#   facet_wrap(~product, ncol = 2, scales = "free") +
+#   coord_flip()
+```
 
-complaints_train_otpdpr <- complaints_train_id |> 
-  unnest_tokens(word, complaint) |> 
-  filter(!word %in% stop_words$word)
-
-complaints_counts <- complaints_train_otpdpr |> 
-  count(word, product, sort = TRUE) |>
-  cast_dtm(document = product, term = word, value = n) |> 
-  tidy() |> 
-  rename(word = term, product = document, prod_count = count)
-
-complaints_tot
-complaints_counts |> 
-  group_by(word) |> 
-  mutate(word_freq =  )
-
-count_join <- complaints_counts |>
-  left_join(complaints_train_otpdpr, by = join_by(product, word)) |> 
-  unique()
-
-complaints_joined <- count_join
-
-# count_join |> 
-#   pivot_wider(names_from = word, values_from = prod_count)
+```{r}
+# 
+# complaints_train_id <- complaints_train |> 
+#   select(product, complaint) |>
+#   mutate("complaint" = str_replace_all(complaint, "X{2,4}", ""),
+#          "id_complaint" = row_number(), .after = product)
+# 
+# complaints_train_otpdpr <- complaints_train_id |> 
+#   unnest_tokens(word, complaint) |> 
+#   filter(!word %in% stop_words$word)
+# 
+# complaints_counts <- complaints_train_otpdpr |> 
+#   count(word, product, sort = TRUE) |>
+#   cast_dtm(document = product, term = word, value = n) |> 
+#   tidy() |> 
+#   rename(word = term, product = document, prod_count = count)
+# 
+# complaints_tot
+# complaints_counts |> 
+#   group_by(word) |> 
+#   mutate(word_freq =  )
+# 
+# count_join <- complaints_counts |>
+#   left_join(complaints_train_otpdpr, by = join_by(product, word)) |> 
+#   unique()
+# 
+# complaints_joined <- count_join
+# 
+# # count_join |> 
+# #   pivot_wider(names_from = word, values_from = prod_count)
 
 ```
+
+#### Explore Frequency Matrix
+
+```{r}
+complaints_modeling
+
+glimpse(complaints_modeling |> select(1:25))
+# skimr::skim(complaints_modeling)
+```
+
 
 #### Evaluate State-Complaint Correlation
 
 ```{r}
 # install.packages("corrplot") 
-library(corrplot)  
+# library(corrplot)  
 
-state_cor <- cor(complaints_train |> select(state, product)) 
-corrplot::corrplot(state_cor, tl.cex = 0.5)
+# state_cor <- cor(complaints_modeling) 
+# corrplot::corrplot(state_cor, tl.cex = 0.5)
 ```
 
-No correlation can be determined from the
+No correlation can be determined from the corrplot() function.
 
 ### Step 1: Data Splitting with rsample
 
@@ -204,7 +252,7 @@ No correlation can be determined from the
 # ensure the split is done the same if code is rerun
 set.seed(1234)
 # split data set into test and training
-split_complaints <- initial_split(complaints_joined, prop = 2/3) 
+split_complaints <- initial_split(complaints_modeling, prop = 2/3) 
 split_complaints
 
 # split_complaints <- initial_split(complaints_counts, prop = 2/3) 
@@ -214,11 +262,11 @@ split_complaints
 ```{r}
 training_complaints <- training(split_complaints)
 head(training_complaints)
-count(training_complaints, product)
+count(training_complaints, product_value)
 
 testing_complaints <-testing(split_complaints)
 head(testing_complaints)
-count(testing_complaints, product)
+count(testing_complaints, product_value)
 ```
 
 ```{r}
@@ -231,7 +279,7 @@ pull(vfold_complaints, splits)
 
 ```{r}
 # Explore one of the folds
-first_fold <-vfold_complaints$splits[[1]]
+first_fold <- vfold_complaints$splits[[1]]
 head(as.data.frame(first_fold, data = "analysis")) # training set of this fold
 
 head(as.data.frame(first_fold, data = "assessment")) # test set of this fold
@@ -241,23 +289,16 @@ head(as.data.frame(first_fold, data = "assessment")) # test set of this fold
 
 ```{r}
 complaints_recipe <- training_complaints |>
-  recipe(product ~ prod_count) 
-  # recipes::recipe(product ~ .) |>
-  # recipes::update_role(id, new_role = "id variable")
+  recipe(product_value ~ .) |> 
+  update_role(complaint_id, new_role = "comlaint id") |> 
+  # Specify preprocessing steps 
+  step_dummy(state, company_dummy, zip_code, one_hot = TRUE) |> 
+  step_corr(all_predictors()) |> 
+  step_nzv(all_predictors())
 
 complaints_recipe
+
 summary(complaints_recipe)
-```
-
-#### Specify preprocessing steps 
-
-```{r}
-# complaints_recipe <- complaints_recipe |> 
-#   step_dummy(state, company, zip_code) |>
-#   step_corr(all_predictors(), - ?) |>
-#   step_nzv(all_predictors(), - ?)
-# 
-# complaints_recipe
 ```
 
 #### Check the preprocessing
@@ -277,7 +318,7 @@ glimpse(preproc_train)
 
 ```{r}
 baked_test_complaints <- recipes::bake(prepped_rec, new_data = testing_complaints)
-glimpse(baked_test_pm)
+glimpse(baked_test_complaints)
 ```
 
 Some of our levels were not previously seen in the training set! (company_Not.a.company???)
@@ -449,9 +490,9 @@ pred_products <- predict(prod_comp_wflow_fit, new_data = training_complaints)
 
 
 yardstick::accuracy(training_complaints, 
-                truth = product, estimate = pred_products$.pred_class)
+                truth = product_value, estimate = pred_products$.pred_class)
 
-count(training_complaints, product)
+count(training_complaints, product_value)
 count(pred_products, .pred_class)
 
 predicted_and_truth <- bind_cols(training_complaints, 
@@ -459,7 +500,7 @@ predicted_and_truth <- bind_cols(training_complaints,
 
 head(predicted_and_truth)
 
-filter(predicted_and_truth, product != predicted_products)
+filter(predicted_and_truth, product_value != predicted_products)
 ```
 
 ```{r}
@@ -506,31 +547,31 @@ complaints_train <- complaints_train |>
 
 
 complaints_train_id <- complaints_train |> 
-  select(product, "complaint" = consumer_complaint_narrative) |>
+  select(product_value, complaint) |>
   mutate("complaint" = str_replace_all(complaint, "X{2,4}", ""),
-         "id_complaint" = row_number(), .after = product)
+         "id_complaint" = row_number(), .after = product_value)
 
 complaints_train_otpdpr <- complaints_train_id |> 
   unnest_tokens(word, complaint) |> 
   filter(!word %in% stop_words$word)
 
 complaints_counts <- complaints_train_otpdpr |> 
-  count(word, .by = product, sort = TRUE) |>
-  rename(product = .by) |>
-  cast_dtm(document = product, term = word, value = n) |> 
+  count(word, .by = product_value, sort = TRUE) |>
+  rename(product_value = .by) |>
+  cast_dtm(document = product_value, term = word, value = n) |> 
   tidy() |> 
-  rename(word = term, product = document, prod_count = count)
+  rename(word = term, product_value = document, prod_count = count)
 
 count_join <- complaints_counts |>
-  left_join(complaints_train_otpdpr, by = join_by(product, word)) |> 
+  left_join(complaints_train_otpdpr, by = join_by(product_value, word)) |> 
   unique()
 
 complaints_simlpe <- complaints_train |>
-  select(!c(consumer_complaint_narrative, zip_code, submitted_via)) |> 
-  mutate("id_complaint" = row_number(), .after = product)
+  select(!c(complaint, zip_code, submitted_via)) |> 
+  mutate("id_complaint" = row_number(), .after = product_value)
   
 complaints_joined <- count_join |>
-  left_join(complaints_simlpe, by = join_by(id_complaint, product))
+  left_join(complaints_simlpe, by = join_by(id_complaint, product_value))
 
 complaints_joined |>
   pivot_wider(names_from = word, values_from = prod_count)
@@ -552,11 +593,11 @@ split_complaints
 ```{r}
 training_complaints <- training(split_complaints)
 head(training_complaints)
-count(training_complaints, product)
+count(training_complaints, product_value)
 
 testing_complaints <-testing(split_complaints)
 head(testing_complaints)
-count(testing_complaints, product)
+count(testing_complaints, product_value)
 ```
 
 ```{r}
@@ -579,7 +620,7 @@ head(as.data.frame(first_fold, data = "assessment")) # test set of this fold
 
 ```{r}
 complaints_recipe <- training_complaints |>
-  recipe(product ~ count + company + state) 
+  recipe(product_value ~ count + company + state) 
 
 complaints_recipe
 

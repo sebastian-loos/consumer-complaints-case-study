@@ -3,9 +3,9 @@ set.seed(123)
 products <- c("mortgage", "student loan", "car loan", "credit card")
 ids <- 1:20
 complaints <- c(
-  "The mortgage terms are not what I expected. Very disappointed.",
-  "I have a student loan, and the interest rates are too high.",
-  "My car loan application was denied without proper explanation.",
+  "The mortgage terms 0.00 are not what I expected. Very disappointed.",
+  "I have a __ student loan 94.05, and the interest rates are too high.",
+  "My car loan 1900.00 application was denied without proper explanation.",
   "I was charged incorrectly on my credit card statement.",
   "Mortgage payments keep increasing unexpectedly.",
   "Student loan servicer is unresponsive to my requests.",
@@ -26,10 +26,9 @@ complaints <- c(
 )
 
 complaint_df <- tibble(
-  problem_id = as.factor(ids),
+  complaint_id = as.factor(ids),
   product = sample(products, 20, replace = TRUE),
-  complaint = complaints
-  ) |> 
+  complaint = complaints) |> 
   mutate(product = as_factor(product))
 
 # Load the data into a corpus
@@ -38,8 +37,8 @@ one_word <- complaint_df |>
   filter(!word %in% stop_words$word)
 
 dtm <- one_word |> 
-  count(problem_id, word) |> 
-  cast_dtm(document = problem_id, term = word, value = n)
+  count(complaint_id, word) |>
+  cast_dtm(document = complaint_id, term = word, value = n)
   
 inspect(dtm)
 
