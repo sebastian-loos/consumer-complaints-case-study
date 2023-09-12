@@ -22,6 +22,7 @@ library(readr)
 library(here)
 library(tidyverse)
 library(tidytext)
+library(tidymodels)
 library(SnowballC)
 library(tm)
 library(rsample)
@@ -523,14 +524,14 @@ preproc_train <- bake(prepped_rec, new_data = NULL)
 glimpse(preproc_train)
 ```
 
-#### Extract preprocessed testing data using bake()
+##### Extract preprocessed testing data using bake()
 
 ```{r}
 baked_test_complaints <- recipes::bake(prepped_rec, new_data = testing_complaints)
 glimpse(baked_test_complaints)
 ```
 
-Some of our levels were not previously seen in the training set! (company_Not.a.company???)
+Some of our levels were not previously seen in the training set!
 
 -\> check differences between testing and training set
 
@@ -549,7 +550,6 @@ dim(dplyr::intersect(traincompanies, testcompanies))
 complaints_modeling |> skimr::skim(company_dummy)
 
 
-
 traincompanies <- training_complaints |>
   distinct(state_dummy)
 testcompanies <- testing_complaints |>
@@ -561,98 +561,6 @@ dim(dplyr::setdiff(traincompanies, testcompanies))
 #get the number of companies that overlapped
 dim(dplyr::intersect(traincompanies, testcompanies))
 ```
-
-## Itration 2
-
-### Fix dataset
-
-
-
-```{r}
-complaints_modeling <- corpus_model1
-# complaints_modeling <- corpus_model2
-# complaints_modeling <- words_model
-# complaints_modeling <- stems_model
-```
-
-### Step 1: Data Splitting with rsample
-
-```{r}
-# ensure the split is done the same if code is rerun
-set.seed(1234)
-# split data set into test and training
-split_complaints <- initial_split(complaints_modeling, prop = 2/3) 
-split_complaints
-
-# split_complaints <- initial_split(complaints_counts, prop = 2/3) 
-# split_complaints
-```
-
-```{r}
-training_complaints <- training(split_complaints)
-# head(training_complaints)
-count(training_complaints, product_value)
-
-testing_complaints <-testing(split_complaints)
-# head(testing_complaints)
-count(testing_complaints, product_value)
-```
-
-#### Step 1.2 Split training set into cross validation sets
-
-```{r}
-set.seed(1234)
-vfold_complaints <- rsample::vfold_cv(data = training_complaints, v = 4)
-vfold_complaints
-
-pull(vfold_complaints, splits)
-```
-
-```{r}
-# Explore one of the folds
-first_fold <- vfold_complaints$splits[[1]]
-head(as.data.frame(first_fold, data = "analysis")) # training set of this fold
-
-head(as.data.frame(first_fold, data = "assessment")) # test set of this fold
-```
-
-### Step 2: Create recipe with recipe()
-
-```{r}
-complaints_recipe <- training_complaints |>
-  recipe(product_value ~ .) |> 
-  update_role(complaint_id, new_role = "comlaint id") |> 
-  # Specify preprocessing steps 
-  step_dummy(state_dummy, company_dummy, zip_code, one_hot = TRUE) |> 
-  step_corr(all_predictors()) |> 
-  step_nzv(all_predictors())
-
-complaints_recipe
-
-summary(complaints_recipe)
-```
-
-#### Check the preprocessing
-
-```{r}
-prepped_rec <- prep(complaints_rec, verbose = TRUE, retain = TRUE)
-```
-
-```{r}
-preproc_train <- bake(prepped_rec, new_data = NULL) 
-glimpse(preproc_train)
-```
-
-We now only have *38* variables instead of 50 and no longer categorical variables.
-
-#### Extract preprocessed testing data using bake()
-
-```{r}
-baked_test_pm <- recipes::bake(prepped_rec, new_data = testing_complaints)
-glimpse(baked_test_pm)
-```
-
-Great, now we no longer have NA values!
 
 ### Step 3: Specify model, engine, and mode (parsnip)
 
@@ -666,7 +574,6 @@ complaints_model <-
   parsnip::set_mode("classification")
 
 complaints_model
-
 ```
 
 #### Specify hyperparameters to tune (tune())
@@ -694,8 +601,7 @@ prod_comp_wflow_fit
 
 ```{r}
 wf_fit_comp <- prod_comp_wflow_fit |> 
-  extract_fit_parsnip() |> 
-  broom::tidy()
+  extract_fit_parsnip()
 wf_fit_comp
 
 wf_fit_comp$fit$variable.importance
@@ -704,32 +610,102 @@ wf_fit_comp$fit$variable.importance
 ### Step 5.2: Fit workflow with cross validation
 
 ```{r}
-set.seed(122)
-resample_fit <- tune::fit_resamples(prod_comp_wflow, vfold_complaints)
+# set.seed(122)
+# resample_fit <- tune::fit_resamples(prod_comp_wflow, vfold_complaints)
 ```
 
 ### Step 5.3: Fit workflow with tuning
 
 ```{r}
-reasmple_fit <-tune::tune_grid(prod_comp_wflow_tune, resamples = vfold_complaints, grid = 4)
-
-tune::collect_metrics(resample_fit)
-
-tune::show_best(resample_fit, metric = "accuracy")
+# reasmple_fit <-tune::tune_grid(prod_comp_wflow_tune, resamples = vfold_complaints, grid = 4)
+# 
+# tune::collect_metrics(resample_fit)
+# 
+# tune::show_best(resample_fit, metric = "accuracy")
 ```
 
 ### Step 6: Get predictions
 
 ```{r}
+pred_products <- predict(prod_comp_wflow_fit, new_data = training_complaints)
+pred_products_test <- predict(prod_comp_wflow_fit, new_data = testing_complaints)
 
 ```
+
+
+
+### Step 7: Use predictions to ger performance metrics
+
+```{r}
+model_performance <- training_complaints |> 
+ mutate(predictions = pred_products$.pred_class) |> 
+ metrics(truth = product_value, estimate = predictions)
+
+print(model_performance)
+
+count(training_complaints, product_value)
+count(pred_products, .pred_class)
+
+predicted_and_truth <- bind_cols(training_complaints, 
+        predicted_products = pull(pred_products, .pred_class))
+
+head(predicted_and_truth)
+
+filter(predicted_and_truth, product_value != predicted_products)
+
+
+model_performance_test <- testing_complaints |> 
+  mutate(predictions = pred_products_test$.pred_class, .after = product_value) |> 
+  metrics(truth = product_value, estimate = predictions)
+
+print(model_performance_test)
+
+count(testing_complaints, product_value)
+count(pred_products_test, .pred_class)
+
+predicted_and_truth <- bind_cols(training_complaints, 
+        predicted_products = pull(pred_products, .pred_class))
+
+head(predicted_and_truth)
+
+filter(predicted_and_truth, product_value != predicted_products)
+
+
+```
+
+
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #### Save predicted outcome values
 
 ```{r}
 
 ```
-
 
 #### Visualizing Model Performance
 
