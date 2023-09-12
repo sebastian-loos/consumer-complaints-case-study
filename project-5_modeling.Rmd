@@ -22,6 +22,7 @@ library(readr)
 library(here)
 library(tidyverse)
 library(tidytext)
+library(SnowballC)
 library(tm)
 library(rsample)
 library(recipes)
@@ -35,7 +36,10 @@ library(workflows)
 
 ```{r}
 complaints_train <- read_csv(here::here("data", "raw_data", "data_complaints_train.csv")) |> 
-  janitor::clean_names() |> 
+  janitor::clean_names()
+
+# organize variable names and types
+complaints_train <- complaints_train |> 
   select(-submitted_via) |> 
   mutate(complaint_id = as.factor(row_number()), .before = everything(),
          product = as.factor(product)) |> 
@@ -60,39 +64,167 @@ glimpse(complaints_test)
 
 skimr::skim(complaints_train)
 skimr::skim(complaints_test)
+```
 
+For the training data we have initially 90'975 complaints (rows) and 6 total variables (columns) where no values are missing. We have 4 different products for which the distribution can be seen in the following plot.
+
+```{r}
+complaints_train |> 
+  group_by(product) |> 
+  summarise(count = n()) |> 
+  mutate(percent = count / sum(count) * 100 ) |>  
+  ungroup() |>  
+  arrange(desc(count)) |> 
+  ggplot(aes(x = "", y = percent, fill = product)) +
+  geom_col(color = "black") +
+  geom_text(aes(label = round(percent, digits = 1)),
+            position = position_stack(vjust = 0.5)) +
+  coord_polar(theta = "y") +
+  scale_fill_brewer() +
+  labs(title = "Distribution of products for the training dataset.",
+       x = "",
+       y = "Percentage of Product Type") +
+  guides(fill = guide_legend(title = "Product")) +
+  theme(axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank(),
+        panel.background = element_rect(fill = "#ebf2ff"),
+        plot.background = element_rect(fill = "#ebf2ff"),
+        legend.background = element_rect(fill = "#ebf2ff"))
+
+```
+
+There is no clear tendency visible between the lenght of a complaint and the product type.
+```{r}
+complaints_train |> 
+  mutate(textlength = nchar(complaint), .after = complaint) |> 
+  ggplot(mapping = aes(x = textlength)) +
+  geom_histogram(binwidth = 200) +
+  facet_grid(product ~ .)
+  
+complaints_train |> 
+  mutate(textlength = nchar(complaint), .after = complaint) |> 
+  ggplot(mapping = aes(x = textlength, product)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_x_continuous(limits = c(0, 3500))
+
+```
+
+```{r}
 # complaints_train |> distinct(state) |> view()
 ```
 
-For the training data we have initially 90'975 complaints (rows) and 6 total variables (columns) where no values are missing. The variable state has 62 unique values which include all the 50 US states and other territories outside the Union as Puerto Rico (PR) or Armed forces Pacific (AP).
+The variable state has 62 unique values which include all the 50 US states and other territories outside the Union as Puerto Rico (PR) or Armed forces Pacific (AP).
 
-#### Term frequency
+## Term frequency
 
 From the exploring of the data, no correlation between the different variables were visible. The most promising way to design the model is to create a matrix with how frequent a given word appears for a given complaint and use it as features for a machine learning algorithm. In the following the matrix is generated.
 
+### Data preparation
+
+####Reducing Sample size
 ```{r}
 # reduce sample size
 complaints_train <- complaints_train |>
-  sample_n(200)
-
+  sample_n(10000)
 ```
+
+#### Create tidy data set
+
+```{r}
+complaints_train_tidy <- complaints_train |> 
+  mutate(
+    # lower case
+    complaint = str_to_lower(complaint),
+    
+    # remove any strings such as "XX", "XXX", "XXXX" in the complaints
+    complaint = str_replace_all(complaint, "xx+", "")) |> 
+  
+   # remove digits and punctuation
+  mutate(
+    complaint = removePunctuation(complaint),
+    complaint = stripWhitespace(complaint),
+    # complaint = str_replace_all(complaint,'[0-9]+', "")
+    complaint = str_trim(complaint)
+  )
+```
+
+
+### Variation 1
+
+
+```{r}
+
+complaints_corpus1 <- Corpus(VectorSource(complaints_train_tidy$complaint))
+print(complaints_corpus1)
+
+# inspect(complaints_corpus1[1:5])
+
+complaints_corpus_tidy <- complaints_corpus1 |>
+  # tm_map(wordLengths = c(4, Inf)) |> 
+  tm_map(removePunctuation) |> 
+  # tm_map(removeNumbers) |>
+  tm_map(stemDocument) |> 
+  tm_map(removeWords, stopwords()) |> 
+  tm_map(stripWhitespace)
+
+print(complaints_corpus_tidy)
+inspect(complaints_corpus_tidy[1:5])
+
+complaints_corpus_dtm1 <- DocumentTermMatrix(complaints_corpus_tidy)
+
+inspect(complaints_corpus_dtm1)
+```
+
+
+### Variation 2
+
+```{r}
+complaints_corpus2 <- Corpus(VectorSource(complaints_train_tidy$complaint))
+print(complaints_corpus2)
+
+inspect(complaints_corpus2[1:5])
+
+complaints_corpus_dtm2 <- DocumentTermMatrix(complaints_corpus2,
+                                             control = list(
+                                       stripWhitespace = TRUE,
+                                       stopwords = TRUE,
+                                       stemming = TRUE,
+                                       # removeNumbers = TRUE,
+                                       # wordLengths = c(4, Inf),
+                                       removePunctuation = TRUE
+                                       ))
+
+inspect(complaints_corpus_dtm2)
+
+# complaints_courpus_dtm2 <- removeSparseTerms(complaints_corpus_dtm2, 0.95)
+# inspect(complaints_corpus_dtm2)
+```
+
+### Variation 3
 
 ```{r}
 # count number of times word appears within each text
-complaints_words <- complaints_train |> 
-  mutate(complaint = str_replace_all(complaint, "X{2,4}", "")) |>
+complaints_words <- complaints_train_tidy |> 
+  # renumber the rows
   mutate(complaint_id = as.factor(row_number())) |> 
   unnest_tokens(word, complaint) |>
   filter(!word %in% stop_words$word) |> 
   relocate(word, .after = product)
 
+complaints_words |> 
+  filter(str_length(word) > 15) #|> view()
+
+skimr::skim(complaints_words)
+
 complaints_count <- complaints_words |> 
   count(complaint_id, product, word)
 
+# tables
 complaints_count |> 
   group_by(product) |> 
   mutate(tot_n = sum(n),
-         percentage = n/tot_n) |> view()
+         percentage = n/tot_n) #|> view()
 
 complaints_count |> 
   group_by(product) |>
@@ -101,21 +233,68 @@ complaints_count |>
 complaints_count |> 
   group_by(product) |> 
   arrange(desc(n), .by_group = TRUE)
+
+# create dtm
   
-complaints_dtm <- complaints_count|>
+complaints_words_dtm <- complaints_count|>
   cast_dtm(term = word, document = complaint_id, value = n)
 
-inspect(complaints_dtm)
+inspect(complaints_words_dtm)
 
-complaints_matrix <- as.matrix(complaints_dtm)
-complaints_matrix
+```
 
-complaints_modeling <- complaints_train |> 
+### Variation 4
+
+```{r}
+
+complaints_stems <- complaints_words |>
+  mutate(stem = wordStem(word), .after = word)
+
+
+complaints_stems_count <- complaints_stems |> 
+  count(complaint_id, product, stem)
+
+# create dtm
+  
+complaints_stems_dtm <- complaints_stems_count|>
+  cast_dtm(term = stem, document = complaint_id, value = n)
+
+inspect(complaints_stems_dtm)
+```
+
+
+```{r}
+
+inspect(complaints_corpus_dtm1)
+inspect(complaints_corpus_dtm2)
+inspect(complaints_words_dtm)
+inspect(complaints_stems_dtm)
+```
+
+### Add meta data
+
+```{r}
+create_matrix <- function(dtm, meta){
+  complaints_matrix <- as.matrix(dtm)
+  complaints_matrix
+  
+  model_matrix <- meta |> 
+    cbind(complaints_matrix) |>
+    as_tibble()
+  
+  return(model_matrix)
+}
+
+complaints_meta <- complaints_train |> 
   select(-complaint) |> 
   rename(product_value = product,
-         company_dummy = company) |> 
-  cbind(complaints_matrix) |>
-  as_tibble()
+         company_dummy = company,
+         state_dummy = state)
+
+corpus_model1 <- create_matrix(complaints_corpus_dtm1, complaints_meta)
+corpus_model2 <- create_matrix(complaints_corpus_dtm2, complaints_meta)
+words_model <- create_matrix(complaints_words_dtm, complaints_meta)
+stems_model <- create_matrix(complaints_stems_dtm, complaints_meta)
 
 # # count total number of words in each poem
 # total_words <- complaints_words |> 
@@ -124,6 +303,8 @@ complaints_modeling <- complaints_train |>
 # 
 # complaints_words <- left_join(complaints_words, total_words)
 ```
+
+## Trash
 
 ```{r}
 # # count number of times word appears within each text
@@ -252,6 +433,8 @@ glimpse(complaints_modeling |> select(1:25))
 # state_cor <- cor(complaints_modeling) 
 # corrplot::corrplot(state_cor, tl.cex = 0.5)
 ```
+
+## Modeling
 
 No correlation can be determined from the corrplot() function.
 
