@@ -1,0 +1,578 @@
+---
+title: "consumer-complaint-modeling"
+author: "Sebastian Camilo Loos"
+date: "2023-09-13"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup_chunks, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.path = "images/",
+  out.width = "100%",
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+## Load Packages
+
+```{r load_packages}
+library(readr)
+library(here)
+library(tidyverse)
+library(tidytext)
+library(tidymodels)
+library(SnowballC)
+library(tm)
+library(rsample)
+library(recipes)
+library(rpart)
+library(tune)
+library(vip)
+library(workflows)
+library(randomForest)
+```
+
+## Load data sets
+
+```{r load_datasets}
+complaints_train <- read_csv(here::here("data", "raw_data", "data_complaints_train.csv")) |> 
+  janitor::clean_names()
+
+# organize variable names and types
+complaints_train <- complaints_train |> 
+  select(-submitted_via) |> 
+  mutate(complaint_id = as.factor(row_number()), .before = everything(),
+         product = as.factor(product)) |> 
+  rename(complaint = consumer_complaint_narrative)
+complaints_train
+
+complaints_test <- read_csv(here::here("data", "raw_data", "data_complaints_test.csv")) |>
+  janitor::clean_names() |> 
+  select(-submitted_via)
+complaints_test
+
+# save(complaints_train, complaints_test, file = here::here("data", "tidy_data", "project_5.rda"))
+```
+
+## Explore data
+
+```{r explore_data}
+head(complaints_train)
+glimpse(complaints_train)
+head(complaints_test)
+glimpse(complaints_test)
+
+skimr::skim(complaints_train)
+skimr::skim(complaints_test)
+```
+
+For the training data we have initially 90'975 complaints (rows) and 6 total variables (columns) where no values are missing. We have 4 different products for which the distribution can be seen in the following plot.
+
+```{r plot_product_distribution}
+complaints_train |> 
+  group_by(product) |> 
+  summarise(count = n()) |> 
+  mutate(percent = count / sum(count) * 100 ) |>  
+  ungroup() |>  
+  arrange(desc(count)) |> 
+  ggplot(aes(x = "", y = percent, fill = product)) +
+  geom_col(color = "black") +
+  geom_text(aes(label = round(percent, digits = 1)),
+            position = position_stack(vjust = 0.5)) +
+  coord_polar(theta = "y") +
+  scale_fill_brewer() +
+  labs(title = "Distribution of products for the training dataset.",
+       x = "",
+       y = "Percentage of Product Type") +
+  guides(fill = guide_legend(title = "Product")) +
+  theme(axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank(),
+        panel.background = element_rect(fill = "#ebf2ff"),
+        plot.background = element_rect(fill = "#ebf2ff"),
+        legend.background = element_rect(fill = "#ebf2ff"))
+
+```
+
+There is no clear tendency visible between the lenght of a complaint and the product type.
+```{r plot_histogramm}
+complaints_train |> 
+  mutate(textlength = nchar(complaint), .after = complaint) |> 
+  ggplot(mapping = aes(x = textlength)) +
+  geom_histogram(binwidth = 200) +
+  facet_grid(product ~ .)
+  
+complaints_train |> 
+  mutate(textlength = nchar(complaint), .after = complaint) |> 
+  ggplot(mapping = aes(x = textlength, product)) +
+  geom_boxplot(outlier.shape = NA) +
+  scale_x_continuous(limits = c(0, 3500))
+
+```
+
+```{r explore_states}
+# complaints_train |> distinct(state) |> view()
+```
+
+The variable state has 62 unique values which include all the 50 US states and other territories outside the Union as Puerto Rico (PR) or Armed forces Pacific (AP).
+
+## Term frequency
+
+From the exploring of the data, no correlation between the different variables were visible. The most promising way to design the model is to create a matrix with how frequent a given word appears for a given complaint and use it as features for a machine learning algorithm. In the following the matrix is generated.
+
+### Data preparation
+
+#### Reducing Sample size
+```{r reduce_size}
+set.seed(1234)
+# reduce sample size
+complaints_train <- complaints_train |>
+  sample_n(10000)
+```
+
+#### Create tidy data set
+
+```{r tidy_data}
+complaints_train_tidy <- complaints_train |> 
+  mutate(
+    # lower case
+    complaint = str_to_lower(complaint),
+    
+    # remove any strings such as "XX", "XXX", "XXXX" in the complaints
+    complaint = str_replace_all(complaint, "xx+", "")) |> 
+  
+   # remove digits and punctuation
+  mutate(
+    complaint = removePunctuation(complaint),
+    complaint = stripWhitespace(complaint),
+    complaint = str_replace_all(complaint,'[0-9]+', ""),
+    complaint = str_trim(complaint)
+  )
+```
+
+### Variation 2
+
+```{r create_dtm}
+complaints_corpus2 <- Corpus(VectorSource(complaints_train_tidy$complaint))
+print(complaints_corpus2)
+
+inspect(complaints_corpus2[1:5])
+
+complaints_corpus_dtm2 <- DocumentTermMatrix(complaints_corpus2,
+                                             control = list(
+                                       stripWhitespace = TRUE,
+                                       stopwords = TRUE,
+                                       stemming = TRUE,
+                                       removeNumbers = TRUE,
+                                       wordLengths = c(4, Inf),
+                                       removePunctuation = TRUE
+                                       ))
+```
+
+### Inspection
+
+```{r spars_dtm}
+inspect(complaints_corpus_dtm2)
+
+# complaints_dtm <- removeSparseTerms(complaints_corpus_dtm2, 0.90)
+# complaints_dtm <- removeSparseTerms(complaints_corpus_dtm2, 0.95)
+complaints_dtm <- removeSparseTerms(complaints_corpus_dtm2, 0.95)
+inspect(complaints_dtm)
+```
+
+### Add meta data
+
+```{r merge_dtm_train}
+create_matrix <- function(dtm, meta){
+  complaints_matrix <- as.matrix(dtm)
+  complaints_matrix
+  
+  model_matrix <- meta |> 
+    cbind(complaints_matrix) |>
+    as_tibble()
+  
+  return(model_matrix)
+}
+
+complaints_meta <- complaints_train |> 
+  select(-complaint) |> 
+  rename(product_value = product,
+         company_dummy = company,
+         state_dummy = state)
+
+corpus_model2 <- create_matrix(complaints_dtm, complaints_meta)
+
+```
+
+# Modeling
+
+## Model 1: Classification And Regression Tree (CART) using rpart
+
+```{r rpart_define_data}
+complaints_modeling <- corpus_model2
+```
+
+### Step 1: Data Splitting with rsample
+
+```{r rpart_split}
+# ensure the split is done the same if code is rerun
+set.seed(1234)
+# split data set into test and training
+split_complaints <- initial_split(complaints_modeling, prop = 2/3) 
+split_complaints
+```
+
+```{r rpart_train_test}
+training_complaints <- training(split_complaints)
+count(training_complaints, product_value)
+
+testing_complaints <-testing(split_complaints)
+count(testing_complaints, product_value)
+```
+
+### Step 2: Create recipe with recipe()
+
+```{r rpart_recipe}
+complaints_recipe <- training_complaints |>
+  recipe(product_value ~ .) |> 
+  update_role(complaint_id, new_role = "comlaint id") |> 
+  # Specify preprocessing steps 
+  step_dummy(state_dummy, company_dummy, zip_code, one_hot = TRUE) |> 
+  step_nzv(all_predictors()) #|> 
+  # step_corr(all_predictors())
+complaints_recipe
+
+summary(complaints_recipe)
+```
+
+#### Check the preprocessing
+
+```{r rpart_check_prep}
+prepped_rec <- prep(complaints_recipe, verbose = TRUE, retain = TRUE)
+
+names(prepped_rec)
+```
+
+##### Take a look at preprocessed training data
+
+```{r rpart_look}
+preproc_train <- bake(prepped_rec, new_data = NULL)
+glimpse(preproc_train)
+```
+
+##### Extract preprocessed testing data using bake()
+
+```{r rpart_extract_prep}
+baked_test_complaints <- bake(prepped_rec, new_data = testing_complaints)
+glimpse(baked_test_complaints)
+```
+
+##### Check differences between training and testing set
+
+Some of our levels were not previously seen in the training set!
+
+-\> check differences between testing and training set
+
+```{r check_train_test}
+traincompanies <- training_complaints |>
+  distinct(company_dummy)
+testcompanies <- testing_complaints |>
+  distinct(company_dummy)
+
+#get the number of companies that were different
+dim(dplyr::setdiff(traincompanies, testcompanies))
+
+#get the number of companies that overlapped
+dim(dplyr::intersect(traincompanies, testcompanies))
+
+complaints_modeling |> skimr::skim(company_dummy)
+
+
+traincompanies <- training_complaints |>
+  distinct(state_dummy)
+testcompanies <- testing_complaints |>
+  distinct(state_dummy)
+
+#get the number of companies that were different
+dim(dplyr::setdiff(traincompanies, testcompanies))
+
+#get the number of companies that overlapped
+dim(dplyr::intersect(traincompanies, testcompanies))
+```
+
+Still okey.
+
+### Step 3: Specify model, engine, and mode using parsnip
+
+```{r rpart_model}
+complaints_model <- 
+  # define Model (Classification And Regression Tree (CART))
+  parsnip::decision_tree() |>
+  #set engine (rpart)
+  parsnip::set_engine("rpart") |>
+  # set mode (classification)
+  parsnip::set_mode("classification")
+
+complaints_model
+```
+
+
+### Step 4: Create workflow, add recipe, add model
+
+```{r rpart_workflow}
+prod_comp_wflow <- workflows::workflow() |>
+                   workflows::add_recipe(complaints_recipe) |>
+                   workflows::add_model(complaints_model)
+
+prod_comp_wflow
+```
+
+### Step 5.1 Fit model to training data
+
+```{r}
+prod_comp_wflow_fit <- parsnip::fit(prod_comp_wflow, data = training_complaints)
+
+prod_comp_wflow_fit
+
+```
+
+#### Assessing the Model Fit
+
+```{r}
+wf_fit_comp <- prod_comp_wflow_fit |> 
+  extract_fit_parsnip()
+```
+
+#### Explore Variable importance
+
+```{r}
+broomstick::tidy(wf_fit_comp) |> head(n = 20)
+
+prod_comp_wflow_fit |>
+  pull_workflow_fit() |>  
+  vip(num_features = 20)
+```
+
+### Step 6: Get predictions
+
+#### Pull out our predicted outcome values
+
+```{r}
+# wf_fitted_values <- 
+#   broomstick::augment(wf_fit_comp, new_data = training_complaints)
+# broom::augment()
+# head(wf_fitted_values)
+```
+
+```{r}
+pred_products <- predict(prod_comp_wflow_fit, new_data = training_complaints)
+
+values_pred <- pred_products |> 
+  bind_cols(training_complaints |> select(product_value, complaint_id, company_dummy, state_dummy, zip_code))
+values_pred
+
+```
+
+#### Visualizing Model Performance
+
+```{r}
+# values_pred
+#   mutate(count_pred = count(.p),
+#          count_truth)
+#   ggplot(aes(x = )) + 
+#   geom_point() + 
+#   xlab("actual outcome values") + 
+#   ylab("predicted outcome values")
+```
+
+#### Quantifying Model Performance
+
+```{r}
+yardstick::accuracy(values_pred, 
+                truth = product_value, estimate = .pred_class)
+
+count(values_pred, product_value)
+count(values_pred, .pred_class)
+```
+
+### Assessing Model Performance on v-folds using tune
+
+#### Step 1.2 Split training set into cross validation sets
+
+```{r}
+set.seed(1234)
+vfold_complaints <- rsample::vfold_cv(data = training_complaints, v = 5)
+vfold_complaints
+
+pull(vfold_complaints, splits)
+```
+
+```{r}
+# Explore one of the folds
+first_fold <- vfold_complaints$splits[[1]]
+head(as.data.frame(first_fold, data = "analysis")) # training set of this fold
+
+head(as.data.frame(first_fold, data = "assessment")) # test set of this fold
+```
+
+### Step 5.2: Fit workflow with cross validation
+
+```{r}
+set.seed(122)
+resample_fit <- tune::fit_resamples(prod_comp_wflow, vfold_complaints)
+
+resample_fit
+
+collect_metrics(resample_fit)
+
+show_best(resample_fit, metrics = "accuracy")
+```
+
+## Model 2: Random Forest
+
+### Prepare Model data
+
+```{r}
+complaints_modeling <- complaints_modeling |> 
+  select(-c(company_dummy, state_dummy, zip_code))
+```
+
+### Step 1: Data Splitting with rsample
+
+```{r}
+# ensure the split is done the same if code is rerun
+set.seed(1234)
+# split data set into test and training
+split_complaints <- initial_split(complaints_modeling, prop = 2/3) 
+split_complaints
+```
+
+```{r}
+training_complaints <- training(split_complaints)
+count(training_complaints, product_value)
+
+testing_complaints <-testing(split_complaints)
+count(testing_complaints, product_value)
+```
+
+### Step 2: Create recipe with recipe()
+
+```{r}
+RF_complaints_recipe <- training_complaints |>
+  recipe(product_value ~ .) |> 
+  update_role(complaint_id, new_role = "comlaint id") |> 
+  # Specify preprocessing steps 
+  # step_novel(company_dummy) |> 
+  step_nzv(all_predictors()) #|> 
+  # step_corr(all_predictors())
+RF_complaints_recipe
+
+summary(RF_complaints_recipe)
+```
+
+### Step 3: Specify model, engine, and mode using parsnip
+
+```{r}
+RF_complaints_model <- 
+  # define Model (Classification And Regression Tree (CART))
+  parsnip::rand_forest(mtry = 10, min_n = 4) |>
+  #set engine (rpart)
+  parsnip::set_engine("randomForest") |>
+  # set mode (classification)
+  parsnip::set_mode("classification")
+
+RF_complaints_model
+```
+
+### Step 4: Create workflow, add recipe, add model
+
+```{r}
+RF_wflow <- workflows::workflow() |> 
+            workflows::add_recipe(RF_complaints_recipe) |> 
+            workflows::add_model(RF_complaints_model)
+RF_wflow
+```
+
+### Step 5.1 Fit workflow with cross validation
+
+```{r}
+RF_wflow_fit <- parsnip::fit(RF_wflow, data = training_complaints)
+RF_wflow_fit
+```
+
+#### Explore Variable importance using vip()
+
+```{r}
+RF_wflow_fit |> 
+  pull_workflow_fit() |> 
+  vip(num_features = 10)
+```
+
+### Skip Step 6:
+
+### Assessing Model Performance on v-folds using tune
+
+#### Step 1.2 Split training set into cross validation sets
+
+```{r}
+set.seed(1234)
+vfold_complaints <- rsample::vfold_cv(data = training_complaints, v = 4)
+vfold_complaints
+
+pull(vfold_complaints, splits)
+```
+
+```{r}
+
+set.seed(456)
+resample_RF_fit <- tune::fit_resamples(RF_wflow, vfold_complaints)
+collect_metrics(resample_RF_fit)
+```
+
+### Model Tuning
+
+#### Step 3.2: Specify hyperparameters to tune (tune())
+
+```{r}
+tune_RF_model <- 
+  rand_forest(mtry = tune(), min_n = tune()) |>
+  set_engine("randomForest") |>
+  set_mode("classification")
+tune_RF_model
+```
+
+### Step 4.2: 
+
+```{r}
+RF_tune_wflow <- workflows::workflow() %>%
+            workflows::add_recipe(RF_complaints_recipe) %>%
+            workflows::add_model(tune_RF_model)
+RF_tune_wflow
+```
+
+#### Step 5.3: Fit workflow with tuning
+
+```{r}
+doParallel::registerDoParallel(cores=11)
+set.seed(123)
+tune_RF_results <- tune::tune_grid(RF_tune_wflow, resamples = vfold_complaints)
+
+tune_RF_results%>%
+  collect_metrics() %>%
+  head()
+
+tune::show_best(tune_RF_results, metric = "accuracy")
+```
+
+```{r}
+
+```
+
+
+
+
