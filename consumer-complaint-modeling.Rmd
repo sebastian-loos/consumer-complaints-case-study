@@ -21,6 +21,7 @@ knitr::opts_chunk$set(
 ## Load Packages
 
 ```{r load_packages}
+
 library(readr)
 library(here)
 library(tidyverse)
@@ -100,6 +101,7 @@ complaints_train |>
 ```
 
 There is no clear tendency visible between the lenght of a complaint and the product type.
+
 ```{r plot_histogramm}
 complaints_train |> 
   mutate(textlength = nchar(complaint), .after = complaint) |> 
@@ -128,6 +130,7 @@ From the exploring of the data, no correlation between the different variables w
 ### Data preparation
 
 #### Reducing Sample size
+
 ```{r reduce_size}
 set.seed(1234)
 # reduce sample size
@@ -180,8 +183,9 @@ complaints_corpus_dtm2 <- DocumentTermMatrix(complaints_corpus2,
 inspect(complaints_corpus_dtm2)
 
 # complaints_dtm <- removeSparseTerms(complaints_corpus_dtm2, 0.90)
-# complaints_dtm <- removeSparseTerms(complaints_corpus_dtm2, 0.95)
 complaints_dtm <- removeSparseTerms(complaints_corpus_dtm2, 0.95)
+# complaints_dtm <- removeSparseTerms(complaints_corpus_dtm2, 0.97)
+
 inspect(complaints_dtm)
 ```
 
@@ -334,7 +338,7 @@ prod_comp_wflow
 
 ### Step 5.1 Fit model to training data
 
-```{r}
+```{r rpart_fit}
 prod_comp_wflow_fit <- parsnip::fit(prod_comp_wflow, data = training_complaints)
 
 prod_comp_wflow_fit
@@ -343,14 +347,14 @@ prod_comp_wflow_fit
 
 #### Assessing the Model Fit
 
-```{r}
+```{r rpart_assess_fit}
 wf_fit_comp <- prod_comp_wflow_fit |> 
   extract_fit_parsnip()
 ```
 
 #### Explore Variable importance
 
-```{r}
+```{r rpart_importance}
 broomstick::tidy(wf_fit_comp) |> head(n = 20)
 
 prod_comp_wflow_fit |>
@@ -362,14 +366,14 @@ prod_comp_wflow_fit |>
 
 #### Pull out our predicted outcome values
 
-```{r}
+```{r rpart_pull_fail}
 # wf_fitted_values <- 
 #   broomstick::augment(wf_fit_comp, new_data = training_complaints)
 # broom::augment()
 # head(wf_fitted_values)
 ```
 
-```{r}
+```{r rpart_merge_pred}
 pred_products <- predict(prod_comp_wflow_fit, new_data = training_complaints)
 
 values_pred <- pred_products |> 
@@ -380,7 +384,7 @@ values_pred
 
 #### Visualizing Model Performance
 
-```{r}
+```{r rpart_plot_pred}
 # values_pred
 #   mutate(count_pred = count(.p),
 #          count_truth)
@@ -392,7 +396,7 @@ values_pred
 
 #### Quantifying Model Performance
 
-```{r}
+```{r rpart_perform}
 yardstick::accuracy(values_pred, 
                 truth = product_value, estimate = .pred_class)
 
@@ -404,7 +408,7 @@ count(values_pred, .pred_class)
 
 #### Step 1.2 Split training set into cross validation sets
 
-```{r}
+```{r rpart_vfold}
 set.seed(1234)
 vfold_complaints <- rsample::vfold_cv(data = training_complaints, v = 5)
 vfold_complaints
@@ -412,7 +416,7 @@ vfold_complaints
 pull(vfold_complaints, splits)
 ```
 
-```{r}
+```{r rpart_explore_vfold}
 # Explore one of the folds
 first_fold <- vfold_complaints$splits[[1]]
 head(as.data.frame(first_fold, data = "analysis")) # training set of this fold
@@ -422,7 +426,7 @@ head(as.data.frame(first_fold, data = "assessment")) # test set of this fold
 
 ### Step 5.2: Fit workflow with cross validation
 
-```{r}
+```{r rpart_resample}
 set.seed(122)
 resample_fit <- tune::fit_resamples(prod_comp_wflow, vfold_complaints)
 
@@ -437,14 +441,14 @@ show_best(resample_fit, metrics = "accuracy")
 
 ### Prepare Model data
 
-```{r}
+```{r rf_define_data}
 complaints_modeling <- complaints_modeling |> 
   select(-c(company_dummy, state_dummy, zip_code))
 ```
 
 ### Step 1: Data Splitting with rsample
 
-```{r}
+```{r rf_split}
 # ensure the split is done the same if code is rerun
 set.seed(1234)
 # split data set into test and training
@@ -452,7 +456,7 @@ split_complaints <- initial_split(complaints_modeling, prop = 2/3)
 split_complaints
 ```
 
-```{r}
+```{r rf_train_test}
 training_complaints <- training(split_complaints)
 count(training_complaints, product_value)
 
@@ -462,7 +466,7 @@ count(testing_complaints, product_value)
 
 ### Step 2: Create recipe with recipe()
 
-```{r}
+```{r rf_recipe}
 RF_complaints_recipe <- training_complaints |>
   recipe(product_value ~ .) |> 
   update_role(complaint_id, new_role = "comlaint id") |> 
@@ -477,7 +481,7 @@ summary(RF_complaints_recipe)
 
 ### Step 3: Specify model, engine, and mode using parsnip
 
-```{r}
+```{r rf_model}
 RF_complaints_model <- 
   # define Model (Classification And Regression Tree (CART))
   parsnip::rand_forest(mtry = 10, min_n = 4) |>
@@ -491,7 +495,7 @@ RF_complaints_model
 
 ### Step 4: Create workflow, add recipe, add model
 
-```{r}
+```{r rf_workflow}
 RF_wflow <- workflows::workflow() |> 
             workflows::add_recipe(RF_complaints_recipe) |> 
             workflows::add_model(RF_complaints_model)
@@ -500,14 +504,14 @@ RF_wflow
 
 ### Step 5.1 Fit workflow with cross validation
 
-```{r}
+```{r rf_fit}
 RF_wflow_fit <- parsnip::fit(RF_wflow, data = training_complaints)
 RF_wflow_fit
 ```
 
 #### Explore Variable importance using vip()
 
-```{r}
+```{r rf_importance}
 RF_wflow_fit |> 
   pull_workflow_fit() |> 
   vip(num_features = 10)
@@ -519,7 +523,7 @@ RF_wflow_fit |>
 
 #### Step 1.2 Split training set into cross validation sets
 
-```{r}
+```{r rf_vfold}
 set.seed(1234)
 vfold_complaints <- rsample::vfold_cv(data = training_complaints, v = 4)
 vfold_complaints
@@ -527,7 +531,7 @@ vfold_complaints
 pull(vfold_complaints, splits)
 ```
 
-```{r}
+```{r rf_resample}
 
 set.seed(456)
 resample_RF_fit <- tune::fit_resamples(RF_wflow, vfold_complaints)
@@ -538,7 +542,7 @@ collect_metrics(resample_RF_fit)
 
 #### Step 3.2: Specify hyperparameters to tune (tune())
 
-```{r}
+```{r rf_tune_model}
 tune_RF_model <- 
   rand_forest(mtry = tune(), min_n = tune()) |>
   set_engine("randomForest") |>
@@ -548,7 +552,7 @@ tune_RF_model
 
 ### Step 4.2: 
 
-```{r}
+```{r rf_tune_workflow}
 RF_tune_wflow <- workflows::workflow() %>%
             workflows::add_recipe(RF_complaints_recipe) %>%
             workflows::add_model(tune_RF_model)
@@ -557,7 +561,7 @@ RF_tune_wflow
 
 #### Step 5.3: Fit workflow with tuning
 
-```{r}
+```{r rf_tune_fit}
 doParallel::registerDoParallel(cores=11)
 set.seed(123)
 tune_RF_results <- tune::tune_grid(RF_tune_wflow, resamples = vfold_complaints)
@@ -572,6 +576,10 @@ tune::show_best(tune_RF_results, metric = "accuracy")
 ```{r}
 
 ```
+
+
+
+
 
 
 
