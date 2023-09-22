@@ -621,7 +621,14 @@ test_predictions <- collect_predictions(overallfit)
 ```
 
 ```{r}
-head(test_predictions)
+head(test_predictions) |> view()
+```
+
+### Plot
+
+```{r}
+final_wf <- extract_workflow(overall)
+final_wf
 ```
 
 ```{r}
@@ -629,11 +636,7 @@ head(test_predictions)
 ```
 
 ```{r}
-
-```
-
-```{r}
-
+pred_complaints <- predict(final_wflow, complaints_test)
 ```
 
 ```{r}
