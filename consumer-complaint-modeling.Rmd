@@ -132,10 +132,10 @@ From the exploring of the data, no correlation between the different variables w
 #### Reducing Sample size
 
 ```{r reduce_size}
-set.seed(1234)
-# reduce sample size
-complaints_train <- complaints_train |>
-  sample_n(10000)
+# set.seed(1234)
+# # reduce sample size
+# complaints_train <- complaints_train |>
+#   sample_n(10000)
 ```
 
 #### Create tidy data set
@@ -566,21 +566,82 @@ doParallel::registerDoParallel(cores=11)
 set.seed(123)
 tune_RF_results <- tune::tune_grid(RF_tune_wflow, resamples = vfold_complaints)
 
-tune_RF_results%>%
-  collect_metrics() %>%
+tune_RF_results |> 
+  collect_metrics() |> 
   head()
+```
+
+From the tuning valuation we see that you get the best results with the following parameters.
+
+```{r rf_tune_best}
 
 tune::show_best(tune_RF_results, metric = "accuracy")
+
+# # A tibble: 5 × 8
+#    mtry min_n .metric  .estimator  mean     n std_err .config              
+#   <int> <int> <chr>    <chr>      <dbl> <int>   <dbl> <chr>                
+# 1    88    20 accuracy multiclass 0.852     4 0.00128 Preprocessor1_Model06
+# 2    60    30 accuracy multiclass 0.852     4 0.00118 Preprocessor1_Model01
+# 3    98    27 accuracy multiclass 0.850     4 0.00110 Preprocessor1_Model04
+# 4    19     7 accuracy multiclass 0.850     4 0.00231 Preprocessor1_Model10
+# 5   125    24 accuracy multiclass 0.850     4 0.00134 Preprocessor1_Model07
+
+```
+
+### Final Model performace evaluation
+
+#### Select best tunining values for final fit
+
+```{r final_values}
+# Select best tuning values
+tuned_RF_values<- select_best(tune_RF_results, metric = "accuracy")
+tuned_RF_values
+```
+
+#### Create workflow for final fit
+
+```{r final_workflow}
+# create final workflow
+RF_tuned_wflow <-RF_tune_wflow |> 
+  tune::finalize_workflow(tuned_RF_values)
+```
+
+#### Perform final fit
+
+```{r final_fit}
+overallfit <-tune::last_fit(RF_tuned_wflow, split = split_complaints)
+```
+
+```{r final_collect}
+collect_metrics(overallfit)
+```
+
+```{r}
+test_predictions <- collect_predictions(overallfit)
+```
+
+```{r}
+head(test_predictions)
 ```
 
 ```{r}
 
 ```
 
+```{r}
 
+```
 
+```{r}
 
+```
 
+```{r}
 
+```
+
+```{r}
+
+```
 
 
