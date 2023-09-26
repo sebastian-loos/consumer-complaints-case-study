@@ -54,7 +54,8 @@ complaints_train
 
 complaints_test <- read_csv(here::here("data", "raw_data", "data_complaints_test.csv")) |>
   janitor::clean_names() |> 
-  select(-submitted_via)
+  select(-submitted_via) |> 
+  rename(complaint = consumer_complaint_narrative)
 complaints_test
 
 # save(complaints_train, complaints_test, file = here::here("data", "tidy_data", "project_5.rda"))
@@ -220,6 +221,9 @@ corpus_model2 <- create_matrix(complaints_dtm, complaints_meta)
 ```{r rpart_define_data}
 complaints_modeling <- corpus_model2
 ```
+
+########################################################################################
+
 
 ### Step 1: Data Splitting with rsample
 
@@ -639,12 +643,211 @@ final_wf
 pred_complaints <- predict(final_wflow, complaints_test)
 ```
 
-```{r}
+
+## Final model
+
+### Prepare Model data
+
+```{r rf_define_data}
+complaints_modeling <- complaints_modeling |> 
+  select(-c(company_dummy, state_dummy, zip_code))
+```
+
+### Step 1: Data Splitting with rsample
+
+```{r rf_split}
+# ensure the split is done the same if code is rerun
+set.seed(1234)
+# split data set into test and training
+split_complaints <- initial_split(complaints_modeling, prop = 2/3) 
+split_complaints
+```
+
+```{r rf_train_test}
+training_complaints <- training(split_complaints)
+count(training_complaints, product_value)
+
+testing_complaints <-testing(split_complaints)
+count(testing_complaints, product_value)
+```
+
+### Step 2: Create recipe with recipe()
+
+```{r rf_recipe}
+final_recipe <- training_complaints |>
+  recipe(product_value ~ .) |> 
+  update_role(complaint_id, new_role = "comlaint id") |> 
+  # Specify preprocessing steps 
+  # step_novel(company_dummy) |> 
+  step_nzv(all_predictors()) #|> 
+  # step_corr(all_predictors())
+final_recipe
+
+summary(RF_complaints_recipe)
+```
+
+### Step 3: Specify model, engine, and mode using parsnip
+
+```{r rf_model}
+final_model <- 
+  # define Model (Classification And Regression Tree (CART))
+  parsnip::rand_forest(mtry = 88, min_n = 20) |>
+  #set engine (rpart)
+  parsnip::set_engine("randomForest") |>
+  # set mode (classification)
+  parsnip::set_mode("classification")
+
+final_model
+```
+
+### Step 4: Create workflow, add recipe, add model
+
+```{r rf_workflow}
+final_wflow <- workflows::workflow() |> 
+            workflows::add_recipe(final_recipe) |> 
+            workflows::add_model(final_model)
+final_wflow
+```
+
+### Step 5.1 Fit workflow with cross validation
+
+```{r rf_fit}
+doParallel::registerDoParallel(cores=11)
+
+
+final_fit <- parsnip::fit(RF_wflow, data = training_complaints)
+final_fit
+```
+
+#### Explore Variable importance using vip()
+
+```{r rf_importance}
+final_fit |> 
+  pull_workflow_fit() |> 
+  vip(num_features = 10)
+```
+
+### Skip Step 6:
+
+### Assessing Model Performance on v-folds using tune
+
+#### Step 1.2 Split training set into cross validation sets
+
+```{r rf_vfold}
+set.seed(1234)
+vfold_complaints <- rsample::vfold_cv(data = training_complaints, v = 4)
+vfold_complaints
+
+pull(vfold_complaints, splits)
+```
+
+```{r rf_resample}
+
+set.seed(456)
+resample_final_fit <- tune::fit_resamples(final_wflow, vfold_complaints)
+collect_metrics(resample_RF_fit)
+
+test_predictions <- collect_predictions(resample_final_fit)
 
 ```
 
+
+
+
 ```{r}
+# Train the final model on all training data
+final_model_fit <- final_fit(final_fit, data = train_data)
+```
+
+
+
+#### Create tidy data set
+
+```{r tidy_data}
+complaints_test_tidy <- complaints_test |> 
+  mutate(
+    # lower case
+    complaint = str_to_lower(complaint),
+    
+    # remove any strings such as "XX", "XXX", "XXXX" in the complaints
+    complaint = str_replace_all(complaint, "xx+", "")) |> 
+  
+   # remove digits and punctuation
+  mutate(
+    complaint = removePunctuation(complaint),
+    complaint = stripWhitespace(complaint),
+    complaint = str_replace_all(complaint,'[0-9]+', ""),
+    complaint = str_trim(complaint)
+  )
+```
+
+### Variation 2
+
+```{r create_dtm}
+complaints_test_corpus <- Corpus(VectorSource(complaints_test_tidy$complaint))
+print(complaints_test_corpus)
+
+inspect(complaints_test_corpus[1:5])
+
+complaints_test_dtm <- DocumentTermMatrix(complaints_test_corpus,
+                                             control = list(
+                                       stripWhitespace = TRUE,
+                                       stopwords = TRUE,
+                                       stemming = TRUE,
+                                       removeNumbers = TRUE,
+                                       wordLengths = c(4, Inf),
+                                       removePunctuation = TRUE
+                                       ))
+```
+
+### Inspection
+
+```{r spars_dtm}
+inspect(complaints_test_corpus)
+
+# complaints_dtm <- removeSparseTerms(complaints_corpus_dtm2, 0.90)
+complaints_test_dtm <- removeSparseTerms(complaints_test_corpus, 0.95)
+# complaints_dtm <- removeSparseTerms(complaints_corpus_dtm2, 0.97)
+
+inspect(complaints_test_dtm)
+```
+
+### Add meta data
+
+```{r merge_dtm_train}
+create_matrix <- function(dtm, meta){
+  complaints_matrix <- as.matrix(dtm)
+  complaints_matrix
+  
+  model_matrix <- meta |> 
+    cbind(complaints_matrix) |>
+    as_tibble()
+  
+  return(model_matrix)
+}
+
+complaints_test_meta <- complaints_test |> 
+  select(problem_id)
+
+test_model <- create_matrix(complaints_test_dtm, complaints_test_meta)
+test_model
+
+complaints_colnames <- complaints_modeling |>
+  head(n = 1) |> 
+  select(-c(complaint_id, product_value)) |> 
+  mutate(across(everything(), ~ 0))
+
+final_test_data <- test_model |> 
+  full_join(complaints_colnames) |> 
+  rename(complaint_id = problem_id) |> 
+  mutate(complaint_id = as.factor(complaint_id)) |> 
+  filter(complaint_id != 0) |> 
+  mutate(across(!complaint_id, ~ replace(., is.na(.), 0)))
 
 ```
 
+
+```{r}
+new_predictions <- predict(final_fit, new_data = final_test_data)
+```
 
