@@ -48,5 +48,6 @@ po/*~
 # RStudio Connect folder
 rsconnect/
 
-# to big file
+# too big files
 data_complaints_train.csv
+myEnvironment.RData

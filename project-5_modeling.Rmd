@@ -196,6 +196,28 @@ complaints_corpus_dtm2 <- DocumentTermMatrix(complaints_corpus2,
 inspect(complaints_corpus_dtm2)
 ```
 
+```
+<<DocumentTermMatrix (documents: 90975, terms: 52200)>>
+Non-/sparse entries: 5778682/4743116318
+Sparsity           : 100%
+Maximal term length: 1961
+Weighting          : term frequency (tf)
+Sample             :
+       Terms
+Docs    account call card credit loan month payment receiv time told
+  19650       4    8    0      4   51     1      13     21   10    0
+  25455      97    0    0     15   81    12      33      5    4    0
+  27671       3    1    0      1    4     0      13      3    4    0
+  33614       5    2    7      6    8     2       1     20    5    0
+  58908      24    1    0     27   62    63      54      3   19    0
+  64243       0   14    0      0   84     7      11     11   23    2
+  70389       1    1    2      4    6     3       3      2    0    0
+  73540      16    5    0      9   64     4      44      6   11    0
+  77518       0    0    0      0  854    16      46      0    0    2
+  84551      58    0    0     12   70     6      38      0    8    0
+```
+
+
 ### Variation 3
 
 ```{r}
@@ -271,6 +293,27 @@ inspect(complaints_corpus_dtm2)
 # inspect(complaints_words_dtm)
 # complaints_stems_dtm <- removeSparseTerms(complaints_stems_dtm, 0.95)
 # inspect(complaints_stems_dtm)
+```
+
+``` 
+<<DocumentTermMatrix (documents: 90975, terms: 312)>>
+Non-/sparse entries: 3526661/24857539
+Sparsity           : 88%
+Maximal term length: 10
+Weighting          : term frequency (tf)
+Sample             :
+       Terms
+Docs    account call card credit loan month payment receiv time told
+  11002       1    0    0      1   70     5       8     11   15    1
+  19650       4    8    0      4   51     1      13     21   10    0
+  25455      97    0    0     15   81    12      33      5    4    0
+  37990      20   32    0     11   47    11      10     31   12    9
+  56802      20   10    0      0    6     9      34     28   14    8
+  60769       0   27    6      5   47    12      11     30   17   18
+  68621      11   15    0     10   67     8      25     21   23    8
+  73540      16    5    0      9   64     4      44      6   11    0
+  77518       0    0    0      0  854    16      46      0    0    2
+  84551      58    0    0     12   70     6      38      0    8    0
 ```
 
 ### Add meta data

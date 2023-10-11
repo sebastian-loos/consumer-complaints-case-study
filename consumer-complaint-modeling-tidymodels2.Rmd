@@ -1,0 +1,310 @@
+---
+title: "consumer-complaint-modeling-tidymodels"
+author: "Sebastian Camilo Loos"
+date: "2023-09-13"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup_chunks, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.path = "images/",
+  out.width = "100%",
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+## Load Packages
+
+```{r}
+library(here)
+library(randomForest)
+library(readr)
+library(recipes)
+library(rpart)
+library(rsample)
+library(SnowballC)
+library(stopwords)
+library(textfeatures)
+library(textrecipes)
+library(tidymodels)
+library(tidytext)
+library(tidyverse)
+library(tm)
+library(tune)
+library(vip)
+library(workflows)
+```
+
+## Load data sets
+
+```{r}
+complaints_train <- read_csv(here::here("data", "raw_data", "data_complaints_train.csv")) |> 
+  janitor::clean_names()
+
+# organize variable names and types
+complaints_train <- complaints_train |> 
+  select(-submitted_via) |> 
+  mutate(complaint_id = as.factor(row_number()), .before = everything(),
+         product = as.factor(product)) |> 
+  rename(complaint = consumer_complaint_narrative)
+complaints_train
+
+set.seed(1234)
+# reduce sample size
+complaints_train <- complaints_train |>
+  sample_n(1000)
+
+complaints_test <- read_csv(here::here("data", "raw_data", "data_complaints_test.csv")) |>
+  janitor::clean_names() |> 
+  select(-submitted_via)
+
+complaints_test
+
+# save(complaints_train, complaints_test, file = here::here("data", "tidy_data", "project_5.rda"))
+```
+
+### Step 1: Data Splitting with rsample
+
+```{r}
+# ensure the split is done the same if code is rerun
+set.seed(1234)
+# split data set into test and training
+split_complaints <- initial_split(complaints_train, prop = 2/3) 
+split_complaints
+
+```
+
+```{r}
+training_complaints <- training(split_complaints)
+# head(training_complaints)
+count(training_complaints, product)
+
+testing_complaints <-testing(split_complaints)
+# head(testing_complaints)
+count(testing_complaints, product)
+```
+
+#### Step 1.2 Split training set into cross validation sets
+
+```{r}
+set.seed(1234)
+vfold_complaints <- rsample::vfold_cv(data = training_complaints, v = 10)
+vfold_complaints
+
+pull(vfold_complaints, splits)
+```
+
+```{r}
+# Explore one of the folds
+first_fold <- vfold_complaints$splits[[1]]
+head(as.data.frame(first_fold, data = "analysis")) # training set of this fold
+
+head(as.data.frame(first_fold, data = "assessment")) # test set of this fold
+```
+
+#### Create initial set of count-based features for Yeo-Johnson transformation
+
+```{r}
+basics <- names(textfeatures:::count_functions)
+head(basics)
+#> [1] "n_words"    "n_uq_words" "n_charS"    "n_uq_charS" "n_digits"  
+#> [6] "n_hashtags"
+```
+
+#### Conversion of feature hashes
+
+```{r}
+binary_hash <- function(x) {
+  x <- ifelse(x < 0, -1, x)
+  x <- ifelse(x > 0,  1, x)
+  x
+}
+```
+
+### Step 2: Create recipe with recipe()
+
+```{r}
+pre_proc <-
+  recipe(product ~ complaint_id + complaint, data = training_complaints) %>%
+  # Do not use the product ID as a predictor
+  update_role(complaint_id, new_role = "id") %>%
+  # Make a copy of the raw text
+  step_mutate(complaint_raw = complaint) %>%
+  # Compute the initial features. This removes the `complaint_raw` column
+  step_textfeature(complaint_raw) %>%
+  # Make the feature names shorter
+  step_rename_at(
+    starts_with("textfeature_"),
+    fn = ~ gsub("textfeature_complaint_raw_", "", .)
+  ) %>%
+  step_tokenize(complaint)  %>%
+  step_stopwords(complaint) %>%
+  step_stem(complaint) %>%
+  # step_text_normalization(-complaint) %>%
+  # # Here is where the tuning parameter is declared
+  # step_texthash(complaint, signed = TRUE, num_terms = tune()) %>%
+  # # Simplify these names
+  # step_rename_at(starts_with("complaint_hash"), fn = ~ gsub("complaint_", "", .)) %>%
+  # # Convert the features from counts to values of -1, 0, or 1
+  # step_mutate_at(starts_with("hash"), fn = binary_hash) %>%
+  # Transform the initial feature set
+  # step_YeoJohnson(one_of(!!basics)) %>%
+  step_zv(all_predictors()) 
+```
+
+### Step 3: Specify model, engine, and mode (parsnip)
+
+```{r}
+complaints_model <- 
+  # define Model (Regularized logistic regression)
+  parsnip::decision_tree(cost_complexity = tune(), tree_depth = tune()) |>
+  #set engine (rpart)
+  parsnip::set_engine("rpart") |>
+  # set mode (classification)
+  parsnip::set_mode("classification")
+complaints_model
+```
+
+### Grid Search
+
+Let’s begin our tuning with grid search and a regular grid. For glmnet models, evaluating penalty values is fairly cheap because of the use of the “submodel-trick”. The grid will use 20 penalty values, 5 mixture values, and 3 values for the number of hash features.
+
+```{r}
+tree_grid <- grid_regular(cost_complexity(),
+                          tree_depth(),
+                          # num_terms(),
+                          levels = 5)
+
+tree_grid
+```
+```
+nnklmlömölmö
+```
+
+Finally, let’s run the grid search:
+
+```{r}
+roc_scores <- metric_set(roc_auc)
+
+# doParallel::registerDoParallel(cores=11)
+
+set.seed(1559)
+complaint_rpart <- 
+  tune_grid(
+    complaints_model, 
+    pre_proc, 
+    resamples = vfold_complaints, 
+    grid = tree_grid, 
+    metrics = roc_scores
+  )
+
+complaint_rpart
+
+```
+
+Takes a while...
+
+```{r}
+grid_roc <- 
+  collect_metrics(five_star_glmnet) %>% 
+  arrange(desc(mean))
+grid_roc
+```
+
+The best results have a fairly high penalty value and focus on the ridge penalty (i.e. no feature selection via the lasso’s L1 penalty). The best solutions also use the largest number of hashing features.
+
+What is the relationship between performance and the tuning parameters?
+
+```{r}
+autoplot(five_star_glmnet, metric = "roc_auc")
+```
+
+
+
+## Directed search
+
+```{r}
+hash_range <- num_terms(c(8, 12), trans = log2_trans())
+hash_range
+```
+
+
+```{r}
+five_star_wflow <-
+  workflow() %>%
+  add_recipe(pre_proc) %>%
+  add_model(complaints_model)
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
