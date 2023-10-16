@@ -604,7 +604,9 @@ rf_modeling_data <- complaints_train_merge |>
   select(-c(company_dummy, state_dummy, zip_code))
 ```
 
-### Step 1: Data Splitting with rsample again
+### Perform initial simple model fit
+
+#### Step 1: Data Splitting with rsample again
 
 ```{r rf_split}
 # ensure the split is done the same if code is rerun
@@ -622,7 +624,7 @@ rf_test <-testing(rf_modeling_data_split)
 count(rf_test, product_value)
 ```
 
-### Step 2: Create recipe with recipe()
+#### Step 2: Create recipe with recipe()
 
 ```{r rf_recipe}
 rf_recipe <- rf_train |>
@@ -650,7 +652,7 @@ comlaint id:   1
 • Sparse, unbalanced variable filter on: all_predictors()
 ```
 
-### Step 3: Specify model, engine, and mode using parsnip
+#### Step 3: Specify model, engine, and mode using parsnip
 
 ```{r rf_model}
 rf_simple_model <- 
@@ -664,7 +666,7 @@ rf_simple_model <-
 rf_simple_model
 ```
 
-### Step 4: Create workflow, add recipe, add model
+#### Step 4: Create workflow, add recipe, add model
 
 ```{r rf_workflow}
 rf_simple_wflow <- workflows::workflow() |> 
@@ -673,7 +675,7 @@ rf_simple_wflow <- workflows::workflow() |>
 rf_simple_wflow
 ```
 
-### Step 5.1 Fit workflow with cross validation
+#### Step 5.1 Fit workflow with cross validation
 
 ```{r rf_fit}
 doParallel::registerDoParallel(cores=11)
@@ -759,8 +761,6 @@ save.image(file='rf_vfold.RData')
 
 The metrics have improved with this model where we used the parameters `mtry` = 10 and `min_n` = 4. Let's see, if we can get an even better performance by tuning these parameters.
 
-### Model Tuning
-
 #### Step 3.2: Specify hyperparameters to tune (tune())
 
 ```{r rf_tune_model}
@@ -771,7 +771,7 @@ rf_tune_model <-
 rf_tune_model
 ```
 
-### Step 4.2:
+#### Define worflow for tuning
 
 ```{r rf_tune_workflow}
 rf_tune_wflow <- workflows::workflow() %>%
@@ -884,7 +884,7 @@ rf_tunedd_values <- select_best(rf_tune_results, metric = "accuracy")
 rf_tunedd_values
 ```
 
-#### Create workflow for final fit
+#### Create workflow for tuned Random Forest fit
 
 ```{r rf_tunedd_workflow}
 # create final workflow
@@ -914,12 +914,13 @@ Main Arguments:
 Computational engine: randomForest 
 ```
 
-#### Perform final fit
+#### Perform tuned Random Forest fit
 
 ```{r rf_tunedd_overallfit}
 doParallel::registerDoParallel(cores=11)
 
-rf_tunedd_overallfit <-tune::last_fit(rf_tunedd_wflow, split = rf_modeling_data_split)
+rf_tunedd_overallfit <- tune::last_fit(rf_tunedd_wflow, 
+                                       split = rf_modeling_data_split)
 rf_tunedd_overallfit
 ```
 
@@ -1006,7 +1007,7 @@ rf_pred_test_values |>
 ggsave(here::here("images", "pred-true-model-final.png"), width= 8, height = 4)
 ```
 
-![](images/pred-true-model-final.png)
+![](images/pred-true-model-final.png){#fig-final-comparison}
 
 As one can see, the good (but not perfect!) fit of the final model is also visible in the distribution of the different complaint/product categories for the test split of the whole training dataset.\
 Further steps of analysis could include the analysis of sensitivity and specificity with regards to the the different categories, but because of the limited time this analysis will be skipped.
@@ -1109,7 +1110,7 @@ Main Arguments:
 Computational engine: randomForest 
 ```
 
-### Step 5.1 Fit workflow with cross validation
+### Perform final fit
 
 ```{r final_fit}
 doParallel::registerDoParallel(cores=11)
@@ -1150,56 +1151,9 @@ Student loan                                  660  0.25543741
 Vehicle loan or lease                        3160  0.49528829
 ```
 
-### Assessing Model Performance on v-folds using tune
+Before applying the final model on the testing data, let's have a look on the output that the final fit generated. It shows the values for the parameters that we received from tuning, but also the actual number of trees that the were used (500). The estimated error rate for out sample data of 14.94% correlates with the calculated accuracy values that we got with the best tuning parameters as seen in Section [Perform tuned Random Forest fit] which shows an accuracy of 85.4%. The output above also shows that the error will most likely be linked to the class "Vehicle loan or lease" or "Student loan".
 
-```{r final_resample}
-
-control <- control_resamples(save_pred = TRUE)
-
-doParallel::registerDoParallel(cores=11)
-
-set.seed(456)
-final_fit_resample <- tune::fit_resamples(final_wflow, 
-                                          rf_vfolds, 
-                                          control = control)
-collect_metrics(final_fit_resample)
-
-final_pred_test_values <- collect_predictions(final_fit_resample)
-
-
-final_pred_test_values |>
-  pivot_longer(c(.pred_class, product_value), names_to = "pred_or_orig", values_to = "products") |> 
-  group_by(products, pred_or_orig) |> 
-  summarise(count = n()) |> 
-  group_by(pred_or_orig) |> 
-  mutate(percent = count / sum(count) * 100) |>   
-  ungroup() |>  
-  arrange(desc(count)) |> 
-  ggplot(aes(x = "", y = percent, fill = products)) +
-  facet_grid(cols = vars(pred_or_orig),
-             labeller = as_labeller(c(.pred_class = "Predictions",
-                                      product_value = "Truth"))) +
-  geom_col(color = "black") +
-  geom_text(aes(label = round(percent, digits = 1)),
-            position = position_stack(vjust = 0.5)) +
-  coord_polar(theta = "y") +
-  scale_fill_brewer() +
-  labs(title = "Prediction and the true values for the distribution of products for the testing split \nof the training dataset.",
-       x = "",
-       y = "Percentage of Product Type") +
-  guides(fill = guide_legend(title = "Product")) +
-  theme(axis.text = element_blank(),
-        axis.ticks = element_blank(),
-        panel.grid = element_blank(),
-        panel.background = element_rect(fill = "#ebf2ff"),
-        plot.background = element_rect(fill = "#ebf2ff"),
-        legend.background = element_rect(fill = "#ebf2ff"))
-
-# ggsave(here::here("images", "pred-true-model-final.png"), width= 8, height = 4)
-
-```
-
-## Predict Categories for test dataset
+### Predict Categories for test dataset
 
 ```{r predict_test_dataset}
 final_test_predictions <- predict(final_fit, new_data = final_test_data)
