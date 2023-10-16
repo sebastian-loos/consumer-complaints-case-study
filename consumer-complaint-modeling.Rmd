@@ -4,7 +4,7 @@ author: "Sebastian Camilo Loos"
 date: "2023-09-13"
 output: html_document
 editor_options: 
-  chunk_output_type: inline
+  chunk_output_type: console
 ---
 
 ```{r setup_chunks, include=FALSE}
@@ -14,13 +14,14 @@ knitr::opts_chunk$set(
   fig.path = "images/",
   out.width = "100%",
   message = FALSE,
-  warning = FALSE
+  warning = FALSE,
+  eval = FALSE
 )
 ```
 
 ## Load Packages
 
-```{r load_packages}
+```{r load_packages, eval=TRUE}
 library(readr)
 library(here)
 library(tidyverse)
@@ -150,7 +151,7 @@ From the exploring of the data, no correlation between the different variables w
 
 First, tidy the data to have a little bit and remove the X's and numbers.
 
-```{r tidy_data}
+```{r tidy_train_data}
 complaints_train_tidy <- training_data |> 
   mutate(
     # lower case
@@ -172,7 +173,7 @@ complaints_train_tidy <- training_data |>
 
 I tried out different ways to implement the model. Some included manipulating the complaints within the tibble, creating the DTM and narrowing the terms later. Different methods to create and manipulate the dtm were also explored. There was no specific reason for staying with this variation and later in the project I discovered more convenient methods that might have done this better/prettier.
 
-```{r create_dtm}
+```{r create_train_dtm}
 complaints_train_corpus <- Corpus(VectorSource(complaints_train_tidy$complaint))
 print(complaints_train_corpus)
 
@@ -220,7 +221,7 @@ Docs    account call card credit loan month payment receiv time told
 
 #### Remove Sparse Terms
 
-```{r spars_dtm}
+```{r spars_train_dtm}
 # complaints_train_dtm <- removeSparseTerms(complaints_train_dtm, 0.90)
 complaints_train_dtm <- removeSparseTerms(complaints_train_dtm, 0.95)
 # complaints_train_dtm <- removeSparseTerms(complaints_train_dtm, 0.97)
@@ -251,7 +252,7 @@ Docs    account call card credit loan month payment receiv time told
 
 ### Add meta data
 
-```{r merge_dtm_train}
+```{r merge_train_dtm}
 create_matrix <- function(dtm, meta){
   complaints_matrix <- as.matrix(dtm)
   complaints_matrix
@@ -885,7 +886,7 @@ rf_tunedd_values
 
 #### Create workflow for final fit
 
-```{r final_workflow}
+```{r rf_tunedd_workflow}
 # create final workflow
 rf_tunedd_wflow <-rf_tune_wflow |> 
   tune::finalize_workflow(rf_tunedd_values)
@@ -915,14 +916,14 @@ Computational engine: randomForest
 
 #### Perform final fit
 
-```{r final_fit}
+```{r rf_tunedd_overallfit}
 doParallel::registerDoParallel(cores=11)
 
 rf_tunedd_overallfit <-tune::last_fit(rf_tunedd_wflow, split = rf_modeling_data_split)
 rf_tunedd_overallfit
 ```
 
-```{r final_collect}
+```{r rf_final_metrics}
 collect_metrics(rf_tunedd_overallfit)
 ```
 
@@ -936,7 +937,7 @@ collect_metrics(rf_tunedd_overallfit)
 
 The application on the test split data shows that the model performs similarly as to the training split data.
 
-```{r}
+```{r rf_final_test_pred}
 rf_pred_test_values <- collect_predictions(rf_tunedd_overallfit)
 ```
 
@@ -973,7 +974,7 @@ rf_pred_test_values |>
 
 ### Plot
 
-```{r}
+```{r plot_true_pred}
 rf_pred_test_values |>
   pivot_longer(c(.pred_class, product_value), names_to = "pred_or_orig", values_to = "products") |> 
   group_by(products, pred_or_orig) |> 
@@ -1010,7 +1011,7 @@ ggsave(here::here("images", "pred-true-model-final.png"), width= 8, height = 4)
 As one can see, the good (but not perfect!) fit of the final model is also visible in the distribution of the different complaint/product categories for the test split of the whole training dataset.\
 Further steps of analysis could include the analysis of sensitivity and specificity with regards to the the different categories, but because of the limited time this analysis will be skipped.
 
-```{r}
+```{r save_rf_final}
 save.image(file='rf_vfold.RData')
 ```
 
@@ -1020,7 +1021,7 @@ So finaly, we have to apply the model to our test dataset. Therefore, we have to
 
 ### Create tidy test data set
 
-```{r tidy_data}
+```{r tidy_test_data}
 complaints_test_tidy <- testing_data |> 
   mutate(
     # lower case
@@ -1056,7 +1057,7 @@ complaints_test_dtm <- DocumentTermMatrix(complaints_test_corpus,
                                        ))
 ```
 
-```{r spars_test_dtm}
+```{r sparse_test_dtm}
 # remove spars terms
 complaints_test_dtm <- removeSparseTerms(complaints_test_dtm, 0.95)
 ```
@@ -1110,7 +1111,7 @@ Computational engine: randomForest
 
 ### Step 5.1 Fit workflow with cross validation
 
-```{r rf_fit}
+```{r final_fit}
 doParallel::registerDoParallel(cores=11)
 
 final_fit <- parsnip::fit(final_wflow, data = rf_train)
@@ -1151,7 +1152,7 @@ Vehicle loan or lease                        3160  0.49528829
 
 ### Assessing Model Performance on v-folds using tune
 
-```{r rf_resample}
+```{r final_resample}
 
 control <- control_resamples(save_pred = TRUE)
 
@@ -1200,38 +1201,24 @@ final_pred_test_values |>
 
 ## Predict Categories for test dataset
 
-```{r}
+```{r predict_test_dataset}
 final_test_predictions <- predict(final_fit, new_data = final_test_data)
-final_test_predictions
 ```
 
-```         
-# A tibble: 20 × 1
-   .pred_class                
-   <fct>                      
- 1 Student loan               
- 2 Vehicle loan or lease      
- 3 Student loan               
- 4 Mortgage                   
- 5 Student loan               
- 6 Credit card or prepaid card
- 7 Credit card or prepaid card
- 8 Credit card or prepaid card
- 9 Student loan               
-10 Vehicle loan or lease      
-11 Mortgage                   
-12 Mortgage                   
-13 Vehicle loan or lease      
-14 Credit card or prepaid card
-15 Mortgage                   
-16 Credit card or prepaid card
-17 Mortgage                   
-18 Student loan               
-19 Vehicle loan or lease      
-20 Vehicle loan or lease
+```{r show_results}
+testing_data |> 
+  select(problem_id) |> 
+  left_join(rowid_to_column(final_test_predictions, "problem_id")) |> 
+  gt::gt() |>
+  gt::tab_header(
+    title = "Predictions of the Problem Classes with the Final Model") |> 
+  gt::cols_label(.list = c("problem_id" = "Problem ID",
+                           ".pred_class" = "Model Problem Prediction"))
 ```
 
-```{r}
+![](images/predictions.png)
+
+```{r save_final}
 save.image(file='rf_final.RData')
 ```
 
