@@ -51,3 +51,8 @@ rsconnect/
 # too big files
 data_complaints_train.csv
 myEnvironment.RData
+rf_final.RData
+rf_final_small.RData
+rf_vfold.RData
+cart.RData
+preprocessing.RData

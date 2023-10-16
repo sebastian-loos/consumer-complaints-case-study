@@ -40,42 +40,42 @@ library(randomForest)
 ## Load data sets
 
 ```{r load_datasets}
-complaints_train <- read_csv(here::here("data", "raw_data", "data_complaints_train.csv")) |> 
+training_data <- read_csv(here::here("data", "raw_data", "data_complaints_train.csv")) |>
   janitor::clean_names()
 
 # organize variable names and types
-complaints_train <- complaints_train |> 
+training_data <- training_data |> 
   select(-submitted_via) |> 
   mutate(complaint_id = as.factor(row_number()), .before = everything(),
          product = as.factor(product)) |> 
   rename(complaint = consumer_complaint_narrative)
-complaints_train
+training_data
 
-complaints_test <- read_csv(here::here("data", "raw_data", "data_complaints_test.csv")) |>
+testing_data <- read_csv(here::here("data", "raw_data", "data_complaints_test.csv")) |>
   janitor::clean_names() |> 
   select(-submitted_via) |> 
   rename(complaint = consumer_complaint_narrative)
-complaints_test
+testing_data
 
-# save(complaints_train, complaints_test, file = here::here("data", "tidy_data", "project_5.rda"))
+# save(training_data, testing_data, file = here::here("data", "tidy_data", "project_5.rda"))
 ```
 
 ## Explore data
 
 ```{r explore_data}
-head(complaints_train)
-glimpse(complaints_train)
-head(complaints_test)
-glimpse(complaints_test)
+head(training_data)
+glimpse(training_data)
+head(testing_data)
+glimpse(testing_data)
 
-skimr::skim(complaints_train)
-skimr::skim(complaints_test)
+skimr::skim(training_data)
+skimr::skim(testing_data)
 ```
 
 For the training data we have initially 90'975 complaints (rows) and 6 total variables (columns) where no values are missing. We have 4 different products for which the distribution can be seen in the following plot.
 
 ```{r plot_product_distribution}
-complaints_train |> 
+training_data |> 
   group_by(product) |> 
   summarise(count = n()) |> 
   mutate(percent = count / sum(count) * 100 ) |>  
@@ -107,7 +107,7 @@ ggsave(here::here("images", "distribution-training.png"), width= 7, height = 4)
 There is no clear tendency visible between the length of a complaint and the product type. Only the complaints in the Mortgage category are slightly longer than the rest.
 
 ```{r plot_histogramm}
-complaints_train |> 
+training_data |> 
   mutate(textlength = nchar(complaint), .after = complaint) |> 
   ggplot(mapping = aes(x = textlength)) +
   geom_histogram(binwidth = 200) +
@@ -118,7 +118,7 @@ complaints_train |>
   
 ggsave(here::here("images", "histogram-training.png"), width= 7, height = 4)
   
-complaints_train |> 
+training_data |> 
   mutate(textlength = nchar(complaint), .after = complaint) |> 
   ggplot(mapping = aes(x = textlength, product)) +
   geom_boxplot(outlier.shape = NA) +
@@ -142,7 +142,7 @@ From the exploring of the data, no correlation between the different variables w
 ```{r reduce_size}
 # set.seed(1234)
 # # reduce sample size
-# complaints_train <- complaints_train |>
+# training_data <- training_data |>
 #   sample_n(1000)
 ```
 
@@ -151,7 +151,7 @@ From the exploring of the data, no correlation between the different variables w
 First, tidy the data to have a little bit and remove the X's and numbers.
 
 ```{r tidy_data}
-complaints_train_tidy <- complaints_train |> 
+complaints_train_tidy <- training_data |> 
   mutate(
     # lower case
     complaint = str_to_lower(complaint),
@@ -173,12 +173,12 @@ complaints_train_tidy <- complaints_train |>
 I tried out different ways to implement the model. Some included manipulating the complaints within the tibble, creating the DTM and narrowing the terms later. Different methods to create and manipulate the dtm were also explored. There was no specific reason for staying with this variation and later in the project I discovered more convenient methods that might have done this better/prettier.
 
 ```{r create_dtm}
-complaints_corpus2 <- Corpus(VectorSource(complaints_train_tidy$complaint))
-print(complaints_corpus2)
+complaints_train_corpus <- Corpus(VectorSource(complaints_train_tidy$complaint))
+print(complaints_train_corpus)
 
-inspect(complaints_corpus2[1:5])
+inspect(complaints_train_corpus[1:5])
 
-complaints_corpus_dtm2 <- DocumentTermMatrix(complaints_corpus2,
+complaints_train_dtm <- DocumentTermMatrix(complaints_train_corpus,
                                              control = list(
                                        stripWhitespace = TRUE,
                                        stopwords = TRUE,
@@ -194,7 +194,7 @@ complaints_corpus_dtm2 <- DocumentTermMatrix(complaints_corpus2,
 As you can see the Matrix is very big.
 
 ```{r inspect_dtm}
-inspect(complaints_corpus_dtm2)
+inspect(complaints_train_dtm)
 ```
 
 ```         
@@ -221,11 +221,11 @@ Docs    account call card credit loan month payment receiv time told
 #### Remove Sparse Terms
 
 ```{r spars_dtm}
-# complaints_dtm <- removeSparseTerms(complaints_corpus_dtm2, 0.90)
-complaints_dtm <- removeSparseTerms(complaints_corpus_dtm2, 0.95)
-# complaints_dtm <- removeSparseTerms(complaints_corpus_dtm2, 0.97)
+# complaints_train_dtm <- removeSparseTerms(complaints_train_dtm, 0.90)
+complaints_train_dtm <- removeSparseTerms(complaints_train_dtm, 0.95)
+# complaints_train_dtm <- removeSparseTerms(complaints_train_dtm, 0.97)
 
-inspect(complaints_dtm)
+inspect(complaints_train_dtm)
 ```
 
 ```         
@@ -263,14 +263,18 @@ create_matrix <- function(dtm, meta){
   return(model_matrix)
 }
 
-complaints_meta <- complaints_train |> 
+complaints_train_meta <- training_data |> 
   select(-complaint) |> 
   rename(product_value = product,
          company_dummy = company,
          state_dummy = state)
 
-corpus_model2 <- create_matrix(complaints_dtm, complaints_meta)
+complaints_train_merge <- create_matrix(complaints_train_dtm, complaints_train_meta)
 
+```
+
+```{r}
+save.image(file='preprocessing.RData')
 ```
 
 # Modeling
@@ -278,7 +282,7 @@ corpus_model2 <- create_matrix(complaints_dtm, complaints_meta)
 ## Model 1: Classification And Regression Tree (CART) using rpart
 
 ```{r rpart_define_data}
-complaints_modeling <- corpus_model2
+cart_modeling_data <- complaints_train_merge
 ```
 
 ### Step 1: Data Splitting with rsample
@@ -287,8 +291,8 @@ complaints_modeling <- corpus_model2
 # ensure the split is done the same if code is rerun
 set.seed(1234)
 # split data set into test and training
-split_complaints <- initial_split(complaints_modeling, prop = 2/3) 
-split_complaints
+cart_modeling_data_split <- initial_split(cart_modeling_data, prop = 2/3) 
+cart_modeling_data_split
 ```
 
 ```         
@@ -297,26 +301,26 @@ split_complaints
 ```
 
 ```{r rpart_train_test}
-training_complaints <- training(split_complaints)
-count(training_complaints, product_value)
+cart_train <- training(cart_modeling_data_split)
+count(cart_train, product_value)
 
-testing_complaints <-testing(split_complaints)
-count(testing_complaints, product_value)
+cart_test <-testing(cart_modeling_data_split)
+count(cart_test, product_value)
 ```
 
 ### Step 2: Create recipe with recipe()
 
 ```{r rpart_recipe}
-complaints_recipe <- training_complaints |>
+cart_recipe <- cart_train |>
   recipe(product_value ~ .) |> 
   update_role(complaint_id, new_role = "comlaint id") |> 
   # Specify preprocessing steps 
   step_dummy(state_dummy, company_dummy, zip_code, one_hot = TRUE) |> 
   step_nzv(all_predictors()) #|> 
   # step_corr(all_predictors())
-complaints_recipe
+cart_recipe
 
-summary(complaints_recipe)
+summary(cart_recipe)
 ```
 
 ```         
@@ -336,9 +340,9 @@ comlaint id:   1
 #### Check the preprocessing
 
 ```{r rpart_check_prep}
-prepped_rec <- prep(complaints_recipe, verbose = TRUE, retain = TRUE)
+cart_preprocessing <- prep(cart_recipe, verbose = TRUE, retain = TRUE)
 
-names(prepped_rec)
+names(cart_preprocessing)
 ```
 
 ```         
@@ -353,21 +357,21 @@ The retained training set is ~ 122.19 Mb  in memory.
 ##### Take a look at preprocessed training data
 
 ```{r rpart_look}
-preproc_train <- bake(prepped_rec, new_data = NULL)
-# glimpse(preproc_train)
+cart_train_preproc <- bake(cart_preprocessing, new_data = NULL)
+# glimpse(cart_train_preproc)
 ```
 
 ##### Extract preprocessed testing data using bake()
 
 ```{r rpart_extract_prep}
-baked_test_complaints <- bake(prepped_rec, new_data = testing_complaints)
-# glimpse(baked_test_complaints)
+cart_test_baked <- bake(cart_preprocessing, new_data = cart_test)
+# glimpse(cart_test_baked)
 ```
 
 ### Step 3: Specify model, engine, and mode using parsnip
 
 ```{r rpart_model}
-complaints_model <- 
+cart_model <- 
   # define Model (Classification And Regression Tree (CART))
   parsnip::decision_tree() |>
   #set engine (rpart)
@@ -375,7 +379,7 @@ complaints_model <-
   # set mode (classification)
   parsnip::set_mode("classification")
 
-complaints_model
+cart_model
 ```
 
 ```         
@@ -387,11 +391,11 @@ Computational engine: rpart
 ### Step 4: Create workflow, add recipe, add model
 
 ```{r rpart_workflow}
-prod_comp_wflow <- workflows::workflow() |>
-                   workflows::add_recipe(complaints_recipe) |>
-                   workflows::add_model(complaints_model)
+cart_wflow <- workflows::workflow() |>
+                   workflows::add_recipe(cart_recipe) |>
+                   workflows::add_model(cart_model)
 
-prod_comp_wflow
+cart_wflow
 ```
 
 ### Step 5.1 Fit model to training data
@@ -399,10 +403,8 @@ prod_comp_wflow
 ```{r rpart_fit}
 doParallel::registerDoParallel(cores=11)
 
-prod_comp_wflow_fit <- parsnip::fit(prod_comp_wflow, data = training_complaints)
-
-prod_comp_wflow_fit
-
+cart_fit <- parsnip::fit(cart_wflow, data = cart_train)
+cart_fit
 ```
 
 ```         
@@ -426,16 +428,16 @@ node), split, n, loss, yval, (yprob)
 #### Assessing the Model Fit
 
 ```{r rpart_assess_fit}
-wf_fit_comp <- prod_comp_wflow_fit |> 
+cart_fit_parsnip <- cart_fit |> 
   extract_fit_parsnip()
 ```
 
 #### Explore Variable importance
 
 ```{r rpart_importance}
-broomstick::tidy(wf_fit_comp) |> head(n = 20)
+broomstick::tidy(cart_fit_parsnip) |> head(n = 20)
 
-prod_comp_wflow_fit |>
+cart_fit |>
   extract_fit_parsnip() |>  
   vip(num_features = 20)
 
@@ -449,18 +451,18 @@ ggsave(here::here("images", "importance.png"), width= 7, height = 4)
 #### Pull out our predicted outcome values
 
 ```{r rpart_pull_fail}
-# wf_fitted_values <- 
-#   broomstick::augment(wf_fit_comp, new_data = training_complaints)
+# cart_fitted_values <- 
+#   broomstick::augment(cart_fit_parsnip, new_data = cart_train)
 # broom::augment()
-# head(wf_fitted_values)
+# head(cart_fitted_values)
 ```
 
 ```{r rpart_merge_pred}
-pred_products <- predict(prod_comp_wflow_fit, new_data = training_complaints)
+cart_fit_train_pred <- predict(cart_fit, new_data = cart_train)
 
-values_pred <- pred_products |> 
-  bind_cols(training_complaints |> select(product_value, complaint_id, company_dummy, state_dummy, zip_code))
-values_pred
+cart_predicted_values <- cart_fit_train_pred |> 
+  bind_cols(cart_train |> select(product_value, complaint_id, company_dummy, state_dummy, zip_code))
+cart_predicted_values
 
 ```
 
@@ -486,7 +488,7 @@ values_pred
 #### Visualizing Model Performance
 
 ```{r rpart_plot_pred}
-values_pred |>
+cart_predicted_values |>
   pivot_longer(c(.pred_class, product_value), names_to = "pred_or_orig", values_to = "products") |> 
   group_by(products, pred_or_orig) |> 
   summarise(count = n()) |> 
@@ -526,11 +528,11 @@ Looking at the graph, we can see that the performance of the model on the traini
 To how the effectivness of the model we also calculate the accuracy of the prediction which is 0.799, but we want to achieve at least 0.8 (to hopefully pass the test;) if not more.
 
 ```{r rpart_perform}
-yardstick::accuracy(values_pred, 
+yardstick::accuracy(cart_predicted_values, 
                 truth = product_value, estimate = .pred_class)
 
-count(values_pred, product_value)
-count(values_pred, .pred_class)
+count(cart_predicted_values, product_value)
+count(cart_predicted_values, .pred_class)
 ```
 
 ```         
@@ -548,18 +550,18 @@ So we want to see if a better performance is possible using v-folds cross valida
 
 ```{r rpart_vfold}
 set.seed(1234)
-vfold_complaints <- rsample::vfold_cv(data = training_complaints, v = 5)
-vfold_complaints
+cart_vfolds <- rsample::vfold_cv(data = cart_train, v = 5)
+cart_vfolds
 
-pull(vfold_complaints, splits)
+pull(cart_vfolds, splits)
 ```
 
 ```{r rpart_explore_vfold}
 # Explore one of the folds
-first_fold <- vfold_complaints$splits[[1]]
-head(as.data.frame(first_fold, data = "analysis")) # training set of this fold
+cart_first_fold <- cart_vfolds$splits[[1]]
+head(as.data.frame(cart_first_fold, data = "analysis")) # training set of this fold
 
-head(as.data.frame(first_fold, data = "assessment")) # test set of this fold
+head(as.data.frame(cart_first_fold, data = "assessment")) # test set of this fold
 ```
 
 ### Step 5.2: Fit workflow with cross validation
@@ -567,13 +569,13 @@ head(as.data.frame(first_fold, data = "assessment")) # test set of this fold
 ```{r rpart_resample}
 doParallel::registerDoParallel(cores=11)
 set.seed(122)
-resample_fit <- tune::fit_resamples(prod_comp_wflow, vfold_complaints)
+cart_resample_fit <- tune::fit_resamples(cart_wflow, cart_vfolds)
 
-resample_fit
+cart_resample_fit
 
-collect_metrics(resample_fit)
+collect_metrics(cart_resample_fit)
 
-show_best(resample_fit, metrics = "accuracy")
+show_best(cart_resample_fit, metrics = "accuracy")
 ```
 
 ```         
@@ -586,6 +588,10 @@ show_best(resample_fit, metrics = "accuracy")
 
 We see that the best case doesn't achieve the 80 percent accuracy either. Also the area under the receiver operator curve can be improved and that's why we try an other model, the random forest model.
 
+```{r}
+save.image(file='cart.RData')
+```
+
 ## Model 2: Random Forest
 
 ### Prepare Model data
@@ -593,7 +599,7 @@ We see that the best case doesn't achieve the 80 percent accuracy either. Also t
 We remove any additional variables to simplify the model. In this case it will now only be based on the text analysis of the complaints.
 
 ```{r rf_define_data}
-complaints_modeling <- complaints_modeling |> 
+rf_modeling_data <- complaints_train_merge |> 
   select(-c(company_dummy, state_dummy, zip_code))
 ```
 
@@ -603,31 +609,31 @@ complaints_modeling <- complaints_modeling |>
 # ensure the split is done the same if code is rerun
 set.seed(1234)
 # split data set into test and training
-split_complaints <- initial_split(complaints_modeling, prop = 2/3) 
-split_complaints
+rf_modeling_data_split <- initial_split(rf_modeling_data, prop = 2/3) 
+rf_modeling_data_split
 ```
 
 ```{r rf_train_test}
-training_complaints <- training(split_complaints)
-count(training_complaints, product_value)
+rf_train <- training(rf_modeling_data_split)
+count(rf_train, product_value)
 
-testing_complaints <-testing(split_complaints)
-count(testing_complaints, product_value)
+rf_test <-testing(rf_modeling_data_split)
+count(rf_test, product_value)
 ```
 
 ### Step 2: Create recipe with recipe()
 
 ```{r rf_recipe}
-RF_complaints_recipe <- training_complaints |>
+rf_recipe <- rf_train |>
   recipe(product_value ~ .) |> 
   update_role(complaint_id, new_role = "comlaint id") |> 
   # Specify preprocessing steps 
   # step_novel(company_dummy) |> 
   step_nzv(all_predictors()) #|> 
   # step_corr(all_predictors())
-RF_complaints_recipe
+rf_recipe
 
-summary(RF_complaints_recipe)
+summary(rf_recipe)
 ```
 
 ```         
@@ -646,7 +652,7 @@ comlaint id:   1
 ### Step 3: Specify model, engine, and mode using parsnip
 
 ```{r rf_model}
-RF_complaints_model <- 
+rf_simple_model <- 
   # define Model (Classification And Regression Tree (CART))
   parsnip::rand_forest(mtry = 10, min_n = 4) |>
   #set engine (rpart)
@@ -654,24 +660,24 @@ RF_complaints_model <-
   # set mode (classification)
   parsnip::set_mode("classification")
 
-RF_complaints_model
+rf_simple_model
 ```
 
 ### Step 4: Create workflow, add recipe, add model
 
 ```{r rf_workflow}
-RF_wflow <- workflows::workflow() |> 
-            workflows::add_recipe(RF_complaints_recipe) |> 
-            workflows::add_model(RF_complaints_model)
-RF_wflow
+rf_simple_wflow <- workflows::workflow() |> 
+            workflows::add_recipe(rf_recipe) |> 
+            workflows::add_model(rf_simple_model)
+rf_simple_wflow
 ```
 
 ### Step 5.1 Fit workflow with cross validation
 
 ```{r rf_fit}
 doParallel::registerDoParallel(cores=11)
-RF_wflow_fit <- parsnip::fit(RF_wflow, data = training_complaints)
-RF_wflow_fit
+rf_simple_wflow_fit <- parsnip::fit(rf_simple_wflow, data = rf_train)
+rf_simple_wflow_fit
 ```
 
 ```         
@@ -711,8 +717,8 @@ Vehicle loan or lease                        1422  0.77287973
 The importance has changed slightly, but the main drivers are still the same...
 
 ```{r rf_importance}
-RF_wflow_fit |> 
-  pull_workflow_fit() |> 
+rf_simple_wflow_fit |> 
+  extract_fit_parsnip() |> 
   vip(num_features = 20)
 
 ggsave(here::here("images", "rf-importance.png"), width= 7, height = 4)
@@ -720,24 +726,26 @@ ggsave(here::here("images", "rf-importance.png"), width= 7, height = 4)
 
 ![](images/rf-importance.png)
 
-### Skip Step 6:
-
 ### Assessing Model Performance on v-folds using tune
 
 #### Step 1.2 Split training set into cross validation sets
 
 ```{r rf_vfold}
 set.seed(1234)
-vfold_complaints <- rsample::vfold_cv(data = training_complaints, v = 5)
-vfold_complaints
+rf_vfolds <- rsample::vfold_cv(data = rf_train, v = 5)
+rf_vfolds
 
-pull(vfold_complaints, splits)
+pull(rf_vfolds, splits)
 ```
 
 ```{r rf_resample}
+doParallel::registerDoParallel(cores=8)
+
 set.seed(456)
-resample_RF_fit <- tune::fit_resamples(RF_wflow, vfold_complaints)
-collect_metrics(resample_RF_fit)
+rf_simple_resample_fit <- tune::fit_resamples(rf_simple_wflow, rf_vfolds)
+collect_metrics(rf_simple_resample_fit)
+
+save.image(file='rf_vfold.RData')
 ```
 
 ```         
@@ -748,27 +756,27 @@ collect_metrics(resample_RF_fit)
 2 roc_auc  hand_till  0.932     5 0.000900 Preprocessor1_Model1
 ```
 
-The metrics have improved with this model and the parameters we used for `mtry` (= 10) and `min_n` (= 4). Let's see, if we can get even better performance by tuning these parameters.
+The metrics have improved with this model where we used the parameters `mtry` = 10 and `min_n` = 4. Let's see, if we can get an even better performance by tuning these parameters.
 
 ### Model Tuning
 
 #### Step 3.2: Specify hyperparameters to tune (tune())
 
 ```{r rf_tune_model}
-tune_RF_model <- 
+rf_tune_model <- 
   rand_forest(mtry = tune(), min_n = tune()) |>
   set_engine("randomForest") |>
   set_mode("classification")
-tune_RF_model
+rf_tune_model
 ```
 
 ### Step 4.2:
 
 ```{r rf_tune_workflow}
-RF_tune_wflow <- workflows::workflow() %>%
-            workflows::add_recipe(RF_complaints_recipe) %>%
-            workflows::add_model(tune_RF_model)
-RF_tune_wflow
+rf_tune_wflow <- workflows::workflow() %>%
+            workflows::add_recipe(rf_recipe) %>%
+            workflows::add_model(rf_tune_model)
+rf_tune_wflow
 ```
 
 ```         
@@ -794,12 +802,11 @@ Computational engine: randomForest
 #### Step 5.3: Fit workflow with tuning
 
 ```{r rf_tune_fit}
-doParallel::registerDoParallel(cores=11)
+doParallel::registerDoParallel(cores=10)
 set.seed(123)
-tune_RF_results <- tune::tune_grid(RF_tune_wflow, resamples = vfold_complaints)
+rf_tune_results <- tune::tune_grid(rf_tune_wflow, resamples = rf_vfolds)
 
-tune_RF_results |> 
-  collect_metrics()
+rf_tune_results |> collect_metrics()
 ```
 
 ```         
@@ -829,9 +836,7 @@ tune_RF_results |>
 ```
 
 ```{r rf_tune_best_accuracy}
-tune::show_best(tune_RF_results, metric = "accuracy")
-tune::show_best(tune_RF_results, metric = "roc_auc")
-
+tune::show_best(rf_tune_results, metric = "accuracy")
 ```
 
 ```         
@@ -846,7 +851,7 @@ tune::show_best(tune_RF_results, metric = "roc_auc")
 ```
 
 ```{r rf_tune_best_rocauc}
-tune::show_best(tune_RF_results, metric = "roc_auc") 
+tune::show_best(rf_tune_results, metric = "roc_auc") 
 ```
 
 ```         
@@ -868,27 +873,27 @@ From the tuning valuation we see that the best results for accuracy are achieved
 
 Leading to a accuracy of 0.851 and an area under receiver operator curve of 0.936.
 
-### Final Model performance evaluation
+### Model performance evaluation
 
 #### Select best tuning values for final fit
 
 ```{r final_values}
 # Select best tuning values
-tuned_RF_values<- select_best(tune_RF_results, metric = "accuracy")
-tuned_RF_values
+rf_tunedd_values <- select_best(rf_tune_results, metric = "accuracy")
+rf_tunedd_values
 ```
 
 #### Create workflow for final fit
 
 ```{r final_workflow}
 # create final workflow
-RF_tuned_wflow <-RF_tune_wflow |> 
-  tune::finalize_workflow(tuned_RF_values)
-RF_tuned_wflow
+rf_tunedd_wflow <-rf_tune_wflow |> 
+  tune::finalize_workflow(rf_tunedd_values)
+rf_tunedd_wflow
 ```
 
 ```         
-> RF_tuned_wflow
+> rf_tunedd_wflow
 ══ Workflow ═══════════════════════════════════════════════════════════════════════
 Preprocessor: Recipe
 Model: rand_forest()
@@ -913,12 +918,12 @@ Computational engine: randomForest
 ```{r final_fit}
 doParallel::registerDoParallel(cores=11)
 
-overallfit <-tune::last_fit(RF_tuned_wflow, split = split_complaints)
-overallfit
+rf_tunedd_overallfit <-tune::last_fit(rf_tunedd_wflow, split = rf_modeling_data_split)
+rf_tunedd_overallfit
 ```
 
 ```{r final_collect}
-collect_metrics(overallfit)
+collect_metrics(rf_tunedd_overallfit)
 ```
 
 ```         
@@ -929,14 +934,14 @@ collect_metrics(overallfit)
 2 roc_auc  hand_till      0.936 Preprocessor1_Model1
 ```
 
-The application on the test split data shows that the model performs similarly to the test split as for the training split data.
+The application on the test split data shows that the model performs similarly as to the training split data.
 
 ```{r}
-test_predictions <- collect_predictions(overallfit)
+rf_pred_test_values <- collect_predictions(rf_tunedd_overallfit)
 ```
 
 ```{r}
-test_predictions |> 
+rf_pred_test_values |> 
   select(-id) |> 
   relocate(.pred_class, product_value, .before = `.pred_Credit card or prepaid card`) |> 
   head(n = 15)
@@ -969,7 +974,7 @@ test_predictions |>
 ### Plot
 
 ```{r}
-test_predictions |>
+rf_pred_test_values |>
   pivot_longer(c(.pred_class, product_value), names_to = "pred_or_orig", values_to = "products") |> 
   group_by(products, pred_or_orig) |> 
   summarise(count = n()) |> 
@@ -1002,117 +1007,21 @@ ggsave(here::here("images", "pred-true-model-final.png"), width= 8, height = 4)
 
 ![](images/pred-true-model-final.png)
 
-As one can see, the good (but not perfect!) fit of the final model is also visible in this visualization of the distribution of the different complaint/product categories for the test split of the whole training dataset.
+As one can see, the good (but not perfect!) fit of the final model is also visible in the distribution of the different complaint/product categories for the test split of the whole training dataset.\
+Further steps of analysis could include the analysis of sensitivity and specificity with regards to the the different categories, but because of the limited time this analysis will be skipped.
+
+```{r}
+save.image(file='rf_vfold.RData')
+```
 
 ## Application of Final Model on Test Dataset
 
-Finaly, we have to apply the model to our test dataset. Therefore, we have to perform the same preprocessing steps as done with the traininig dataset.
+So finaly, we have to apply the model to our test dataset. Therefore, we have to perform the same preprocessing steps as done with the traininig dataset.
 
-### Prepare Model data
-
-```{r rf_define_data}
-# complaints_modeling <- complaints_modeling |> 
-#   select(-c(company_dummy, state_dummy, zip_code))
-```
-
-### Step 1: Data Splitting with rsample
-
-```{r rf_split}
-# ensure the split is done the same if code is rerun
-set.seed(1234)
-# split data set into test and training
-split_complaints <- initial_split(complaints_modeling, prop = 2/3) 
-split_complaints
-```
-
-```{r rf_train_test}
-training_complaints <- training(split_complaints)
-count(training_complaints, product_value)
-
-testing_complaints <-testing(split_complaints)
-count(testing_complaints, product_value)
-```
-
-### Step 2: Create recipe with recipe()
-
-```{r rf_recipe}
-final_recipe <- training_complaints |>
-  recipe(product_value ~ .) |> 
-  update_role(complaint_id, new_role = "complaint id") |> 
-  step_nzv(all_predictors())
-final_recipe
-```
-
-### Step 3: Specify model, engine, and mode using parsnip
-
-```{r rf_model}
-final_model <- 
-  # define Model (Random Forest and paramaters)
-  parsnip::rand_forest(mtry = 88, min_n = 20) |>
-  #set engine (rpart)
-  parsnip::set_engine("randomForest") |>
-  # set mode (classification)
-  parsnip::set_mode("classification")
-
-final_model
-```
-
-### Step 4: Create workflow, add recipe, add model
-
-```{r rf_workflow}
-final_wflow <- workflows::workflow() |> 
-            workflows::add_recipe(final_recipe) |> 
-            workflows::add_model(final_model)
-final_wflow
-```
-
-### Step 5.1 Fit workflow with cross validation
-
-```{r rf_fit}
-doParallel::registerDoParallel(cores=11)
-
-final_fit <- parsnip::fit(RF_wflow, data = training_complaints)
-final_fit
-```
-
-### Skip Step 6:
-
-### Assessing Model Performance on v-folds using tune
-
-#### Step 1.2 Split training set into cross validation sets
-
-```{r rf_vfold}
-set.seed(1234)
-vfold_complaints <- rsample::vfold_cv(data = training_complaints, v = 5)
-vfold_complaints
-
-pull(vfold_complaints, splits)
-```
-
-```{r}
-control <- control_resamples(save_pred = TRUE)
-```
-
-```{r rf_resample}
-doParallel::registerDoParallel(cores=11)
-
-set.seed(456)
-resample_final_fit <- tune::fit_resamples(final_wflow, vfold_complaints, control = control)
-collect_metrics(resample_final_fit)
-
-test_predictions <- collect_predictions(resample_final_fit)
-
-```
-
-```{r}
-# # Train the final model on all training data
-# final_model_fit <- last_fit(final_fit, data = train_data)
-```
-
-#### Create tidy data set
+### Create tidy test data set
 
 ```{r tidy_data}
-complaints_test_tidy <- complaints_test |> 
+complaints_test_tidy <- testing_data |> 
   mutate(
     # lower case
     complaint = str_to_lower(complaint),
@@ -1129,9 +1038,8 @@ complaints_test_tidy <- complaints_test |>
   )
 ```
 
-### Variation 2
-
-```{r create_dtm}
+```{r create_test_dtm}
+# Create DTM for the test dataset
 complaints_test_corpus <- Corpus(VectorSource(complaints_test_tidy$complaint))
 print(complaints_test_corpus)
 
@@ -1148,54 +1056,205 @@ complaints_test_dtm <- DocumentTermMatrix(complaints_test_corpus,
                                        ))
 ```
 
-### Inspection
-
-```{r spars_dtm}
-# complaints_dtm <- removeSparseTerms(complaints_corpus_dtm2, 0.90)
+```{r spars_test_dtm}
+# remove spars terms
 complaints_test_dtm <- removeSparseTerms(complaints_test_dtm, 0.95)
-# complaints_dtm <- removeSparseTerms(complaints_corpus_dtm2, 0.97)
-
-inspect(complaints_test_dtm)
 ```
 
-### Add meta data
-
-```{r merge_dtm_train}
-create_matrix <- function(dtm, meta){
-  complaints_matrix <- as.matrix(dtm)
-  complaints_matrix
-  
-  model_matrix <- meta |> 
-    cbind(complaints_matrix) |>
-    as_tibble()
-  
-  return(model_matrix)
-}
-
-complaints_test_meta <- complaints_test |> 
+```{r merge_test_dtm}
+complaints_test_meta <- testing_data |> 
   select(problem_id)
 
-test_model <- create_matrix(complaints_test_dtm, complaints_test_meta)
-test_model
+complaints_test_merge <- create_matrix(complaints_test_dtm, complaints_test_meta)
+complaints_test_merge
 
-complaints_colnames <- complaints_modeling |>
+complaints_colnames <- rf_modeling_data |>
   head(n = 1) |> 
   select(-c(complaint_id, product_value)) |> 
   mutate(across(everything(), ~ 0))
 
-final_test_data <- test_model |> 
+final_test_data <- complaints_test_merge |> 
   full_join(complaints_colnames) |> 
   rename(complaint_id = problem_id) |> 
   mutate(complaint_id = as.factor(complaint_id)) |> 
   filter(complaint_id != 0) |> 
   mutate(across(!complaint_id, ~ replace(., is.na(.), 0)))
+```
+
+### Define final workflow (including recipe and model)
+
+```{r final_wflow}
+final_wflow <- rf_tunedd_wflow
+final_wflow
+```
+
+```         
+══ Workflow ═════════════════════════════════════════════════════════════════════════════════
+Preprocessor: Recipe
+Model: rand_forest()
+
+── Preprocessor ─────────────────────────────────────────────────────────────────────────────
+1 Recipe Step
+
+• step_nzv()
+
+── Model ────────────────────────────────────────────────────────────────────────────────────
+Random Forest Model Specification (classification)
+
+Main Arguments:
+  mtry = 88
+  min_n = 20
+
+Computational engine: randomForest 
+```
+
+### Step 5.1 Fit workflow with cross validation
+
+```{r rf_fit}
+doParallel::registerDoParallel(cores=11)
+
+final_fit <- parsnip::fit(final_wflow, data = rf_train)
+final_fit
+```
+
+```         
+══ Workflow [trained] ═════════════════════════════════════════════════════════
+Preprocessor: Recipe
+Model: rand_forest()
+
+── Preprocessor ───────────────────────────────────────────────────────────────
+1 Recipe Step
+
+• step_nzv()
+
+── Model ──────────────────────────────────────────────────────────────────────
+
+Call:
+ randomForest(x = maybe_data_frame(x), y = y, mtry = min_cols(~88L,      x), nodesize = min_rows(~20L, x)) 
+               Type of random forest: classification
+                     Number of trees: 500
+No. of variables tried at each split: 88
+
+        OOB estimate of  error rate: 14.94%
+Confusion matrix:
+                            Credit card or prepaid card Mortgage Student loan
+Credit card or prepaid card                       24331      516          117
+Mortgage                                            852    17938         1189
+Student loan                                        615      839         6162
+Vehicle loan or lease                              1307      689         1105
+                            Vehicle loan or lease class.error
+Credit card or prepaid card                   535  0.04580572
+Mortgage                                      635  0.12981469
+Student loan                                  660  0.25543741
+Vehicle loan or lease                        3160  0.49528829
+```
+
+### Assessing Model Performance on v-folds using tune
+
+```{r rf_resample}
+
+control <- control_resamples(save_pred = TRUE)
+
+doParallel::registerDoParallel(cores=11)
+
+set.seed(456)
+final_fit_resample <- tune::fit_resamples(final_wflow, 
+                                          rf_vfolds, 
+                                          control = control)
+collect_metrics(final_fit_resample)
+
+final_pred_test_values <- collect_predictions(final_fit_resample)
+
+
+final_pred_test_values |>
+  pivot_longer(c(.pred_class, product_value), names_to = "pred_or_orig", values_to = "products") |> 
+  group_by(products, pred_or_orig) |> 
+  summarise(count = n()) |> 
+  group_by(pred_or_orig) |> 
+  mutate(percent = count / sum(count) * 100) |>   
+  ungroup() |>  
+  arrange(desc(count)) |> 
+  ggplot(aes(x = "", y = percent, fill = products)) +
+  facet_grid(cols = vars(pred_or_orig),
+             labeller = as_labeller(c(.pred_class = "Predictions",
+                                      product_value = "Truth"))) +
+  geom_col(color = "black") +
+  geom_text(aes(label = round(percent, digits = 1)),
+            position = position_stack(vjust = 0.5)) +
+  coord_polar(theta = "y") +
+  scale_fill_brewer() +
+  labs(title = "Prediction and the true values for the distribution of products for the testing split \nof the training dataset.",
+       x = "",
+       y = "Percentage of Product Type") +
+  guides(fill = guide_legend(title = "Product")) +
+  theme(axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid = element_blank(),
+        panel.background = element_rect(fill = "#ebf2ff"),
+        plot.background = element_rect(fill = "#ebf2ff"),
+        legend.background = element_rect(fill = "#ebf2ff"))
+
+# ggsave(here::here("images", "pred-true-model-final.png"), width= 8, height = 4)
 
 ```
 
-```{r}
-pred_complaints <- predict(final_wf, final_test_data)
-pred_complaints
+## Predict Categories for test dataset
 
-new_predictions <- predict(final_fit, new_data = final_test_data)
-new_predictions
+```{r}
+final_test_predictions <- predict(final_fit, new_data = final_test_data)
+final_test_predictions
+```
+
+```         
+# A tibble: 20 × 1
+   .pred_class                
+   <fct>                      
+ 1 Student loan               
+ 2 Vehicle loan or lease      
+ 3 Student loan               
+ 4 Mortgage                   
+ 5 Student loan               
+ 6 Credit card or prepaid card
+ 7 Credit card or prepaid card
+ 8 Credit card or prepaid card
+ 9 Student loan               
+10 Vehicle loan or lease      
+11 Mortgage                   
+12 Mortgage                   
+13 Vehicle loan or lease      
+14 Credit card or prepaid card
+15 Mortgage                   
+16 Credit card or prepaid card
+17 Mortgage                   
+18 Student loan               
+19 Vehicle loan or lease      
+20 Vehicle loan or lease
+```
+
+```{r}
+save.image(file='rf_final.RData')
+```
+
+```{r clean_up}
+rm(
+  complaints_train_corpus,
+  complaints_train_dtm,
+  complaints_train_meta,
+  complaints_train_tidy,
+  complaints_test_corpus,
+  complaints_test_dtm,
+  complaints_test_meta,
+  complaints_test_tidy,
+  rf_modeling_data_split,
+  rf_simple_model,
+  rf_simple_resample_fit,
+  rf_simple_wflow,
+  rf_simple_wflow_fit,
+  rf_tune_wflow,
+  rf_tune_results,
+  rf_tunedd_overallfit,
+  rf_tunedd_wflow
+)
+
+save.image(file='rf_final_small.RData')
 ```
